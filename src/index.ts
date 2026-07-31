@@ -1,11 +1,14 @@
+import { zstdDecompressSync } from "node:zlib";
 import {
 	chatCompletionFromEvents,
 	chatRequestToResponses,
 	createChatCompletionStream,
 } from "./chat";
 import {
+	prepareCompactRequest,
 	prepareResponsesRequest,
 	requestCodex,
+	requestCodexCompact,
 	requestCodexModels,
 } from "./codex";
 import {
@@ -41,6 +44,7 @@ export default {
 						endpoints: [
 							"GET /v1/models",
 							"POST /v1/responses",
+							"POST /v1/responses/compact",
 							"POST /v1/chat/completions",
 						],
 						client_authentication: env.PROXY_API_KEY
@@ -93,10 +97,23 @@ export default {
 				return finalize(
 					new Response(upstream.body, {
 						status: 200,
-						headers: sseHeaders(),
+						headers: sseHeaders(upstream.headers),
 					}),
 					env,
 				);
+			}
+
+			if (
+				request.method === "POST" &&
+				url.pathname === "/v1/responses/compact"
+			) {
+				const input = await parseJsonBody(request);
+				const body = prepareCompactRequest(input);
+				const upstream = await requestCodexCompact(body, env, {
+					headers: request.headers,
+					signal: request.signal,
+				});
+				return finalize(upstreamJson(upstream), env);
 			}
 
 			if (
@@ -126,7 +143,7 @@ export default {
 							),
 							{
 								status: 200,
-								headers: sseHeaders(),
+								headers: sseHeaders(upstream.headers),
 							},
 						),
 						env,
@@ -159,7 +176,23 @@ export default {
 async function parseJsonBody(request: Request): Promise<Record<string, unknown>> {
 	let value: unknown;
 	try {
-		value = await request.json();
+		const contentEncodings = (request.headers.get("Content-Encoding") ?? "")
+			.split(",")
+			.map((value) => value.trim().toLowerCase());
+		if (contentEncodings.includes("zstd")) {
+			const encoded = new Uint8Array(await request.arrayBuffer());
+			let decoded: Uint8Array;
+			try {
+				decoded = zstdDecompressSync(encoded);
+			} catch {
+				// Some HTTP stacks transparently decode the body while retaining the
+				// original Content-Encoding header.
+				decoded = encoded;
+			}
+			value = JSON.parse(new TextDecoder().decode(decoded));
+		} else {
+			value = await request.json();
+		}
 	} catch {
 		throw new ApiError(
 			400,
@@ -210,15 +243,17 @@ function json(value: unknown, status = 200): Response {
 }
 
 function upstreamJson(response: Response): Response {
+	const headers = new Headers({
+		"Content-Type":
+			response.headers.get("Content-Type") ??
+			"application/json; charset=utf-8",
+		"Cache-Control": "no-store",
+	});
+	copyCodexResponseHeaders(response.headers, headers);
 	return new Response(response.body, {
 		status: response.status,
 		statusText: response.statusText,
-		headers: {
-			"Content-Type":
-				response.headers.get("Content-Type") ??
-				"application/json; charset=utf-8",
-			"Cache-Control": "no-store",
-		},
+		headers,
 	});
 }
 
@@ -258,11 +293,18 @@ function invalidModelCatalog(): ApiError {
 	);
 }
 
-function sseHeaders(): HeadersInit {
-	return {
+function sseHeaders(source?: Headers): Headers {
+	const headers = new Headers({
 		"Content-Type": "text/event-stream; charset=utf-8",
 		"Cache-Control": "no-cache, no-transform",
-	};
+	});
+	if (source) copyCodexResponseHeaders(source, headers);
+	return headers;
+}
+
+function copyCodexResponseHeaders(source: Headers, target: Headers): void {
+	const turnState = source.get("X-Codex-Turn-State")?.trim();
+	if (turnState) target.set("X-Codex-Turn-State", turnState);
 }
 
 function finalize(
@@ -273,7 +315,7 @@ function finalize(
 	headers.set("Access-Control-Allow-Origin", env.CORS_ORIGIN || "*");
 	headers.set(
 		"Access-Control-Allow-Headers",
-		"Authorization, Content-Type, X-Api-Key, Version, X-Codex-Beta-Features, X-Codex-Turn-Metadata",
+		"Authorization, Content-Type, X-Api-Key, Version, X-Codex-Beta-Features, X-Codex-Turn-Metadata, X-Codex-Turn-State",
 	);
 	headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
 	return new Response(response.body, {

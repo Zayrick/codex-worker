@@ -16,13 +16,21 @@ export interface AdaptedChatRequest {
 	includeUsage: boolean;
 }
 
+type ToolKind = "function" | "custom";
+
 interface ToolCallState {
 	index: number;
 	itemId: string;
 	id: string;
 	name: string;
 	arguments: string;
+	kind: ToolKind;
 	started: boolean;
+}
+
+interface AdaptedTools {
+	items: JsonObject[];
+	customNames: Set<string>;
 }
 
 interface ChatState {
@@ -52,6 +60,8 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 		);
 	}
 
+	const tools = adaptTools(input.tools);
+	const pendingToolKinds = new Map<string, ToolKind>();
 	const responseInput: JsonObject[] = [];
 	for (let index = 0; index < messages.length; index++) {
 		const message = requireRecord(messages[index], `messages[${index}]`);
@@ -61,7 +71,15 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 			`messages[${index}].role must be a string.`,
 		);
 		const role = sourceRole === "system" ? "developer" : sourceRole;
-		responseInput.push(...messageToResponseItems(message, role, index));
+		responseInput.push(
+			...messageToResponseItems(
+				message,
+				role,
+				index,
+				tools.customNames,
+				pendingToolKinds,
+			),
+		);
 	}
 
 	const body: JsonObject = {
@@ -70,12 +88,11 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 		input: responseInput,
 	};
 
-	const tools = adaptTools(input.tools);
-	if (tools.length > 0) {
-		body.tools = tools;
+	if (tools.items.length > 0) {
+		body.tools = tools.items;
 	}
 	if (input.tool_choice !== undefined) {
-		body.tool_choice = adaptToolChoice(input.tool_choice);
+		body.tool_choice = adaptToolChoice(input.tool_choice, tools.customNames);
 	}
 
 	const reasoningEffort = input.reasoning_effort;
@@ -96,6 +113,13 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 	if (text) body.text = text;
 	if (input.service_tier === "priority") body.service_tier = "priority";
 	if (isRecord(input.metadata)) body.metadata = input.metadata;
+	if (input.prompt_cache_key !== undefined) {
+		body.prompt_cache_key = requireString(
+			input.prompt_cache_key,
+			"prompt_cache_key",
+			"'prompt_cache_key' must be a non-empty string.",
+		);
+	}
 
 	if (
 		input.n !== undefined &&
@@ -157,7 +181,8 @@ export function chatCompletionFromEvents(
 			type: "function",
 			function: {
 				name: tool.name,
-				arguments: tool.arguments || "{}",
+				arguments:
+					tool.kind === "custom" ? tool.arguments : tool.arguments || "{}",
 			},
 		}));
 	}
@@ -248,17 +273,23 @@ function messageToResponseItems(
 	message: JsonObject,
 	role: string,
 	index: number,
+	customToolNames: ReadonlySet<string>,
+	pendingToolKinds: Map<string, ToolKind>,
 ): JsonObject[] {
 	if (role === "tool") {
 		const callId = requireString(
 			message.tool_call_id,
 			`messages[${index}].tool_call_id`,
 		);
+		const kind = pendingToolKinds.get(callId) ?? "function";
 		return [
 			{
-				type: "function_call_output",
+				type:
+					kind === "custom"
+						? "custom_tool_call_output"
+						: "function_call_output",
 				call_id: callId,
-				output: toolOutputText(message.content),
+				output: adaptToolOutput(message.content),
 			},
 		];
 	}
@@ -269,7 +300,7 @@ function messageToResponseItems(
 			{
 				type: "function_call_output",
 				call_id: `legacy-${name}-${index}`,
-				output: toolOutputText(message.content),
+				output: adaptToolOutput(message.content),
 			},
 		];
 	}
@@ -310,23 +341,67 @@ function messageToResponseItems(
 				toolCalls![toolIndex],
 				`messages[${index}].tool_calls[${toolIndex}]`,
 			);
-			const fn = requireRecord(
-				call.function,
-				`messages[${index}].tool_calls[${toolIndex}].function`,
-			);
-			items.push({
-				type: "function_call",
-				call_id: requireString(
-					call.id,
-					`messages[${index}].tool_calls[${toolIndex}].id`,
-				),
-				name: requireString(
+			const callType = stringField(call, "type") ?? "function";
+			const callId =
+				stringField(call, "id") ?? `call-${index}-${toolIndex}`;
+			let kind: ToolKind;
+			let name: string;
+			let callInput: string;
+			if (callType === "custom") {
+				const custom = recordField(call, "custom") ?? call;
+				kind = "custom";
+				name = requireString(
+					custom.name,
+					`messages[${index}].tool_calls[${toolIndex}].custom.name`,
+				);
+				callInput =
+					typeof custom.input === "string"
+						? custom.input
+						: typeof custom.arguments === "string"
+							? custom.arguments
+							: "";
+			} else if (callType === "function") {
+				const fn = requireRecord(
+					call.function,
+					`messages[${index}].tool_calls[${toolIndex}].function`,
+				);
+				name = requireString(
 					fn.name,
 					`messages[${index}].tool_calls[${toolIndex}].function.name`,
-				),
-				arguments:
-					typeof fn.arguments === "string" ? fn.arguments : "{}",
-			});
+				);
+				kind = customToolNames.has(name) ? "custom" : "function";
+				callInput =
+					typeof fn.arguments === "string"
+						? fn.arguments
+						: kind === "custom"
+							? ""
+							: "{}";
+			} else {
+				throw new ApiError(
+					400,
+					`Unsupported tool call type '${callType}'.`,
+					"invalid_request_error",
+					"unsupported_tool_call_type",
+					`messages[${index}].tool_calls[${toolIndex}].type`,
+				);
+			}
+
+			pendingToolKinds.set(callId, kind);
+			items.push(
+				kind === "custom"
+					? {
+							type: "custom_tool_call",
+							call_id: callId,
+							name,
+							input: callInput,
+						}
+					: {
+							type: "function_call",
+							call_id: callId,
+							name,
+							arguments: callInput,
+						},
+			);
 		}
 	}
 	return items;
@@ -404,6 +479,66 @@ function adaptMessageContent(
 			parts.push(imagePart);
 			continue;
 		}
+		if (type === "file" || type === "input_file") {
+			if (role !== "user") {
+				throw new ApiError(
+					400,
+					"File content is supported only in user messages.",
+					"invalid_request_error",
+					"invalid_file_role",
+					`messages[${messageIndex}].content[${partIndex}]`,
+				);
+			}
+			const file = recordField(part, "file") ?? part;
+			const filePart: JsonObject = { type: "input_file" };
+			for (const key of [
+				"file_id",
+				"file_data",
+				"file_url",
+				"filename",
+			] as const) {
+				const field = stringField(file, key);
+				if (field) filePart[key] = field;
+			}
+			if (
+				!filePart.file_id &&
+				!filePart.file_data &&
+				!filePart.file_url
+			) {
+				throw new ApiError(
+					400,
+					"A file content part must include file_id, file_data, or file_url.",
+					"invalid_request_error",
+					"invalid_file",
+					`messages[${messageIndex}].content[${partIndex}].file`,
+				);
+			}
+			parts.push(filePart);
+			continue;
+		}
+		if (type === "input_audio") {
+			if (role !== "user") {
+				throw new ApiError(
+					400,
+					"Audio content is supported only in user messages.",
+					"invalid_request_error",
+					"invalid_audio_role",
+					`messages[${messageIndex}].content[${partIndex}]`,
+				);
+			}
+			const audio = recordField(part, "input_audio") ?? part;
+			const audioPart: JsonObject = {
+				type: "input_audio",
+				data: requireString(
+					audio.data,
+					`messages[${messageIndex}].content[${partIndex}].input_audio.data`,
+				),
+			};
+			const format = stringField(audio, "format");
+			if (format) audioPart.format = format;
+			parts.push(audioPart);
+			continue;
+		}
 		if (type === "refusal" && role === "assistant") {
 			parts.push({
 				type: "output_text",
@@ -422,25 +557,94 @@ function adaptMessageContent(
 	return parts;
 }
 
-function toolOutputText(value: unknown): string {
-	if (typeof value === "string") return value;
+function adaptToolOutput(value: unknown): string | JsonObject[] {
+	if (typeof value === "string") {
+		try {
+			const parsed: unknown = JSON.parse(value);
+			if (
+				Array.isArray(parsed) &&
+				parsed.some((part) => {
+					if (!isRecord(part)) return false;
+					const type = stringField(part, "type");
+					return (
+						type === "image_url" ||
+						type === "input_image" ||
+						type === "file" ||
+						type === "input_file"
+					);
+				})
+			) {
+				return parsed.map(adaptToolOutputPart);
+			}
+		} catch {
+			// Plain-text tool output is the common case.
+		}
+		return value;
+	}
 	if (value === null || value === undefined) return "";
 	if (!Array.isArray(value)) return JSON.stringify(value);
-	return value
-		.map((part) => {
-			if (typeof part === "string") return part;
-			if (!isRecord(part)) return "";
-			return typeof part.text === "string"
-				? part.text
-				: typeof part.content === "string"
-					? part.content
-					: JSON.stringify(part);
-		})
-		.join("\n");
+	return value.map(adaptToolOutputPart);
 }
 
-function adaptTools(value: unknown): JsonObject[] {
-	if (value === undefined) return [];
+function adaptToolOutputPart(value: unknown): JsonObject {
+	if (typeof value === "string") {
+		return { type: "input_text", text: value };
+	}
+	if (!isRecord(value)) {
+		return {
+			type: "input_text",
+			text: value === null || value === undefined ? "" : JSON.stringify(value),
+		};
+	}
+
+	const type = stringField(value, "type");
+	if (type === "text" || type === "input_text" || type === "output_text") {
+		return {
+			type: "input_text",
+			text:
+				typeof value.text === "string"
+					? value.text
+					: typeof value.content === "string"
+						? value.content
+						: "",
+		};
+	}
+	if (type === "image_url" || type === "input_image") {
+		const image = recordField(value, "image_url");
+		const imageUrl =
+			typeof value.image_url === "string"
+				? value.image_url
+				: stringField(image, "url") ?? stringField(value, "url");
+		if (imageUrl) {
+			const part: JsonObject = { type: "input_image", image_url: imageUrl };
+			const detail =
+				stringField(image, "detail") ?? stringField(value, "detail");
+			if (detail) part.detail = detail;
+			return part;
+		}
+	}
+	if (type === "file" || type === "input_file") {
+		const file = recordField(value, "file") ?? value;
+		const part: JsonObject = { type: "input_file" };
+		for (const key of [
+			"file_id",
+			"file_data",
+			"file_url",
+			"filename",
+		] as const) {
+			const field = stringField(file, key);
+			if (field) part[key] = field;
+		}
+		if (part.file_id || part.file_data || part.file_url) return part;
+	}
+
+	return { type: "input_text", text: JSON.stringify(value) };
+}
+
+function adaptTools(value: unknown): AdaptedTools {
+	if (value === undefined) {
+		return { items: [], customNames: new Set() };
+	}
 	if (!Array.isArray(value)) {
 		throw new ApiError(
 			400,
@@ -450,21 +654,34 @@ function adaptTools(value: unknown): JsonObject[] {
 			"tools",
 		);
 	}
-	return value.map((raw, index) => {
+	const customNames = new Set<string>();
+	const functionNames = new Set<string>();
+	const items = value.map((raw, index) => {
 		const tool = requireRecord(raw, `tools[${index}]`);
-		if (tool.type !== "function") {
-			throw new ApiError(
-				400,
-				"Chat Completions compatibility currently supports function tools only.",
-				"invalid_request_error",
-				"unsupported_tool_type",
-				`tools[${index}].type`,
+		const type = requireString(tool.type, `tools[${index}].type`);
+		if (type === "custom") {
+			const custom = recordField(tool, "custom") ?? tool;
+			const name = requireString(
+				custom.name,
+				`tools[${index}].name`,
 			);
+			customNames.add(name);
+			const adapted: JsonObject = { type: "custom", name };
+			if (typeof custom.description === "string") {
+				adapted.description = custom.description;
+			}
+			if (custom.format !== undefined) adapted.format = custom.format;
+			return adapted;
+		}
+		if (type !== "function") {
+			return { ...tool, type };
 		}
 		const fn = requireRecord(tool.function, `tools[${index}].function`);
+		const name = requireString(fn.name, `tools[${index}].function.name`);
+		functionNames.add(name);
 		const adapted: JsonObject = {
 			type: "function",
-			name: requireString(fn.name, `tools[${index}].function.name`),
+			name,
 		};
 		if (typeof fn.description === "string") {
 			adapted.description = fn.description;
@@ -477,11 +694,16 @@ function adaptTools(value: unknown): JsonObject[] {
 		}
 		return adapted;
 	});
+	for (const name of functionNames) customNames.delete(name);
+	return { items, customNames };
 }
 
-function adaptToolChoice(value: unknown): unknown {
+function adaptToolChoice(
+	value: unknown,
+	customToolNames: ReadonlySet<string>,
+): unknown {
 	if (value === "auto" || value === "required" || value === "none") return value;
-	if (!isRecord(value) || value.type !== "function") {
+	if (!isRecord(value)) {
 		throw new ApiError(
 			400,
 			"Invalid 'tool_choice'.",
@@ -490,11 +712,30 @@ function adaptToolChoice(value: unknown): unknown {
 			"tool_choice",
 		);
 	}
-	const fn = requireRecord(value.function, "tool_choice.function");
-	return {
-		type: "function",
-		name: requireString(fn.name, "tool_choice.function.name"),
-	};
+	const type = stringField(value, "type");
+	if (type === "function") {
+		const fn = recordField(value, "function") ?? value;
+		const name = requireString(fn.name, "tool_choice.function.name");
+		return {
+			type: customToolNames.has(name) ? "custom" : "function",
+			name,
+		};
+	}
+	if (type === "custom") {
+		const custom = recordField(value, "custom") ?? value;
+		return {
+			type: "custom",
+			name: requireString(custom.name, "tool_choice.custom.name"),
+		};
+	}
+	if (type) return { ...value, type };
+	throw new ApiError(
+		400,
+		"Invalid 'tool_choice'.",
+		"invalid_request_error",
+		"invalid_tool_choice",
+		"tool_choice",
+	);
 }
 
 function adaptResponseFormat(value: unknown): JsonObject | undefined {
@@ -565,18 +806,21 @@ function absorbEvent(state: ChatState, event: JsonObject): void {
 	}
 	if (type === "response.output_item.added") {
 		const item = recordField(event, "item");
-		if (item?.type === "function_call") ensureTool(state, event, item);
+		if (isToolCallItem(item)) ensureTool(state, event, item);
 		return;
 	}
-	if (type === "response.function_call_arguments.delta") {
-		const itemId =
-			stringField(event, "item_id") ??
-			stringField(event, "call_id") ??
-			`tool-${state.tools.length}`;
+	if (
+		type === "response.function_call_arguments.delta" ||
+		type === "response.custom_tool_call_input.delta"
+	) {
+		const itemId = toolEventItemId(state, event);
 		const tool =
 			state.toolsByItemId.get(itemId) ??
 			ensureTool(state, event, {
-				type: "function_call",
+				type:
+					type === "response.custom_tool_call_input.delta"
+						? "custom_tool_call"
+						: "function_call",
 				id: itemId,
 				call_id: stringField(event, "call_id") ?? itemId,
 				name: "tool",
@@ -584,12 +828,18 @@ function absorbEvent(state: ChatState, event: JsonObject): void {
 		tool.arguments += stringField(event, "delta") ?? "";
 		return;
 	}
+	if (type === "response.custom_tool_call_input.done") {
+		const itemId = toolEventItemId(state, event);
+		const tool = state.toolsByItemId.get(itemId);
+		const input = stringField(event, "input") ?? "";
+		if (tool && !tool.arguments && input) tool.arguments = input;
+		return;
+	}
 	if (type === "response.output_item.done") {
 		const item = recordField(event, "item");
-		if (item?.type === "function_call") {
+		if (isToolCallItem(item)) {
 			const tool = ensureTool(state, event, item);
-			tool.arguments =
-				stringField(item, "arguments") ?? tool.arguments ?? "{}";
+			tool.arguments = toolCallInput(item) ?? tool.arguments;
 		}
 		return;
 	}
@@ -614,6 +864,33 @@ function absorbEvent(state: ChatState, event: JsonObject): void {
 	}
 }
 
+function isToolCallItem(item: JsonObject | undefined): item is JsonObject {
+	return item?.type === "function_call" || item?.type === "custom_tool_call";
+}
+
+function toolKind(item: JsonObject): ToolKind {
+	return item.type === "custom_tool_call" ? "custom" : "function";
+}
+
+function toolCallInput(item: JsonObject): string | undefined {
+	return item.type === "custom_tool_call"
+		? stringField(item, "input")
+		: stringField(item, "arguments");
+}
+
+function toolEventItemId(state: ChatState, event: JsonObject): string {
+	const direct =
+		stringField(event, "item_id") ?? stringField(event, "call_id");
+	if (direct) return direct;
+	const outputIndex = numberField(event, "output_index");
+	if (outputIndex !== undefined) {
+		const indexed = state.tools.find((tool) => tool.index === outputIndex);
+		if (indexed) return indexed.itemId;
+	}
+	const last = state.tools[state.tools.length - 1];
+	return last?.itemId ?? `tool-${state.tools.length}`;
+}
+
 function ensureTool(
 	state: ChatState,
 	event: JsonObject,
@@ -630,6 +907,7 @@ function ensureTool(
 		if (name) existing.name = name;
 		const callId = stringField(item, "call_id");
 		if (callId) existing.id = callId;
+		existing.kind = toolKind(item);
 		return existing;
 	}
 	const outputIndex = numberField(event, "output_index");
@@ -639,6 +917,7 @@ function ensureTool(
 		id: stringField(item, "call_id") ?? itemId,
 		name: stringField(item, "name") ?? "tool",
 		arguments: "",
+		kind: toolKind(item),
 		started: false,
 	};
 	state.tools.push(tool);
@@ -685,7 +964,7 @@ function extractCompletedOutput(response: JsonObject): {
 						typeof content.refusal === "string" ? content.refusal : "";
 				}
 			}
-		} else if (type === "function_call") {
+		} else if (type === "function_call" || type === "custom_tool_call") {
 			tools.push({
 				index: tools.length,
 				itemId: stringField(itemValue, "id") ?? `tool-${tools.length}`,
@@ -694,7 +973,11 @@ function extractCompletedOutput(response: JsonObject): {
 					stringField(itemValue, "id") ??
 					`call-${tools.length}`,
 				name: stringField(itemValue, "name") ?? "tool",
-				arguments: stringField(itemValue, "arguments") ?? "{}",
+				arguments:
+					type === "custom_tool_call"
+						? stringField(itemValue, "input") ?? ""
+						: stringField(itemValue, "arguments") ?? "{}",
+				kind: type === "custom_tool_call" ? "custom" : "function",
 				started: true,
 			});
 		} else if (type === "reasoning" && Array.isArray(itemValue.summary)) {
@@ -750,7 +1033,7 @@ async function writeStreamEvent(
 
 	if (type === "response.output_item.added") {
 		const item = recordField(event, "item");
-		if (item?.type === "function_call") {
+		if (isToolCallItem(item)) {
 			await ensureRoleChunk(writer, state);
 			const tool = ensureTool(state, event, item);
 			if (!tool.started) {
@@ -761,16 +1044,19 @@ async function writeStreamEvent(
 		return;
 	}
 
-	if (type === "response.function_call_arguments.delta") {
+	if (
+		type === "response.function_call_arguments.delta" ||
+		type === "response.custom_tool_call_input.delta"
+	) {
 		await ensureRoleChunk(writer, state);
-		const itemId =
-			stringField(event, "item_id") ??
-			stringField(event, "call_id") ??
-			`tool-${state.tools.length}`;
+		const itemId = toolEventItemId(state, event);
 		const tool =
 			state.toolsByItemId.get(itemId) ??
 			ensureTool(state, event, {
-				type: "function_call",
+				type:
+					type === "response.custom_tool_call_input.delta"
+						? "custom_tool_call"
+						: "function_call",
 				id: itemId,
 				call_id: stringField(event, "call_id") ?? itemId,
 				name: "tool",
@@ -802,12 +1088,50 @@ async function writeStreamEvent(
 		return;
 	}
 
+	if (type === "response.custom_tool_call_input.done") {
+		await ensureRoleChunk(writer, state);
+		const itemId = toolEventItemId(state, event);
+		const tool =
+			state.toolsByItemId.get(itemId) ??
+			ensureTool(state, event, {
+				type: "custom_tool_call",
+				id: itemId,
+				call_id: stringField(event, "call_id") ?? itemId,
+				name: "tool",
+			});
+		if (!tool.started) {
+			tool.started = true;
+			await writer.write(sseData(toolStartChunk(state, tool)));
+		}
+		const input = stringField(event, "input") ?? "";
+		if (!tool.arguments && input) {
+			tool.arguments = input;
+			await writer.write(
+				sseData(
+					chatChunk(
+						state,
+						{
+							tool_calls: [
+								{
+									index: tool.index,
+									function: { arguments: input },
+								},
+							],
+						},
+						null,
+					),
+				),
+			);
+		}
+		return;
+	}
+
 	if (type === "response.output_item.done") {
 		const item = recordField(event, "item");
-		if (item?.type === "function_call") {
+		if (isToolCallItem(item)) {
 			await ensureRoleChunk(writer, state);
 			const tool = ensureTool(state, event, item);
-			const finalArguments = stringField(item, "arguments") ?? "";
+			const finalArguments = toolCallInput(item) ?? "";
 			if (!tool.started) {
 				tool.arguments = finalArguments;
 				tool.started = true;

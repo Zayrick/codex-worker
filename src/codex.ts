@@ -12,6 +12,7 @@ const FORWARDED_CODEX_HEADERS = [
 	"Version",
 	"X-Codex-Beta-Features",
 	"X-Codex-Turn-Metadata",
+	"X-Codex-Turn-State",
 ] as const;
 
 const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
@@ -25,7 +26,6 @@ const REMOVED_REQUEST_FIELDS = new Set([
 	"maxtokens",
 	"originator",
 	"previousresponseid",
-	"promptcachekey",
 	"promptcacheretention",
 	"requestid",
 	"safetyidentifier",
@@ -105,6 +105,50 @@ export function prepareResponsesRequest(
 	});
 }
 
+export function prepareCompactRequest(input: JsonObject): JsonObject {
+	const model = requireString(input.model, "model");
+	if (!Object.prototype.hasOwnProperty.call(input, "input")) {
+		throw new ApiError(
+			400,
+			"Missing required parameter: 'input'.",
+			"invalid_request_error",
+			"missing_required_parameter",
+			"input",
+		);
+	}
+	if (!Array.isArray(input.input)) {
+		throw new ApiError(
+			400,
+			"'input' must be an array.",
+			"invalid_request_error",
+			"invalid_input",
+			"input",
+		);
+	}
+
+	const body: JsonObject = {
+		model,
+		input: normalizeSystemRoles(input.input),
+	};
+	for (const key of [
+		"instructions",
+		"tools",
+		"parallel_tool_calls",
+		"reasoning",
+		"prompt_cache_key",
+		"text",
+	] as const) {
+		if (Object.prototype.hasOwnProperty.call(input, key)) {
+			body[key] = input[key];
+		}
+	}
+	if (input.service_tier === "priority") {
+		body.service_tier = "priority";
+	}
+	normalizeBuiltinTools(body);
+	return body;
+}
+
 export function prepareCodexRequestBody(input: JsonObject): JsonObject {
 	const body: JsonObject = { ...input };
 	for (const key of Object.keys(body)) {
@@ -136,6 +180,7 @@ export async function requestCodex(
 ): Promise<Response> {
 	const credentials = getCodexCredentials(env);
 	const upstreamUrl = resolveRelayUrl(env.CODEX_RELAY_URL);
+	const preparedBody = prepareCodexRequestBody(body);
 	return fetchCodex(
 		upstreamUrl,
 		{
@@ -145,8 +190,34 @@ export async function requestCodex(
 				"text/event-stream",
 				options.headers,
 				true,
+				stringField(preparedBody, "prompt_cache_key"),
 			),
-			body: JSON.stringify(prepareCodexRequestBody(body)),
+			body: JSON.stringify(preparedBody),
+			signal: options.signal,
+		},
+	);
+}
+
+export async function requestCodexCompact(
+	body: JsonObject,
+	env: WorkerEnv,
+	options: CodexRequestOptions = {},
+): Promise<Response> {
+	const credentials = getCodexCredentials(env);
+	const upstreamUrl = resolveCompactUrl(env.CODEX_RELAY_URL);
+	const preparedBody = prepareCompactRequest(body);
+	return fetchCodex(
+		upstreamUrl,
+		{
+			method: "POST",
+			headers: codexHeaders(
+				credentials,
+				"application/json",
+				options.headers,
+				true,
+				stringField(preparedBody, "prompt_cache_key"),
+			),
+			body: JSON.stringify(preparedBody),
 			signal: options.signal,
 		},
 	);
@@ -183,6 +254,7 @@ function codexHeaders(
 	accept: string,
 	source: Headers | undefined,
 	hasJsonBody: boolean,
+	promptCacheKey?: string,
 ): Headers {
 	const headers = new Headers({
 		Accept: accept,
@@ -193,6 +265,9 @@ function codexHeaders(
 	}
 	if (credentials.accountId) {
 		headers.set("Chatgpt-Account-Id", credentials.accountId);
+	}
+	if (promptCacheKey) {
+		headers.set("Session-Id", promptCacheKey);
 	}
 	for (const name of FORWARDED_CODEX_HEADERS) {
 		const value = source?.get(name)?.trim();
@@ -340,6 +415,12 @@ function resolveRelayUrl(relayUrl: string): URL {
 			"invalid_relay_path",
 		);
 	}
+	return url;
+}
+
+function resolveCompactUrl(relayUrl: string): URL {
+	const url = resolveRelayUrl(relayUrl);
+	url.pathname = url.pathname.replace(/\/responses\/?$/, "/responses/compact");
 	return url;
 }
 

@@ -1,3 +1,4 @@
+import { zstdCompressSync } from "node:zlib";
 import {
 	createExecutionContext,
 	env,
@@ -6,8 +7,14 @@ import {
 	waitOnExecutionContext,
 } from "cloudflare:test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { chatRequestToResponses } from "../src/chat";
-import { prepareResponsesRequest } from "../src/codex";
+import {
+	chatCompletionFromEvents,
+	chatRequestToResponses,
+} from "../src/chat";
+import {
+	prepareCompactRequest,
+	prepareResponsesRequest,
+} from "../src/codex";
 import worker from "../src/index";
 import type { WorkerEnv } from "../src/types";
 
@@ -254,6 +261,7 @@ describe("request adaptation", () => {
 				summary: "detailed",
 			},
 			custom_passthrough: { keep: true },
+			prompt_cache_key: "cache-key",
 			store: false,
 			stream: true,
 			parallel_tool_calls: true,
@@ -280,7 +288,6 @@ describe("request adaptation", () => {
 			"context_management",
 			"previous_response_id",
 			"generate",
-			"prompt_cache_key",
 			"prompt_cache_retention",
 			"safety_identifier",
 			"stream_options",
@@ -432,6 +439,263 @@ describe("request adaptation", () => {
 			expect(adapted.body.reasoning).toEqual({ effort: reasoningEffort });
 		},
 	);
+
+	it("maps custom and built-in tools plus file, audio, and structured tool output", () => {
+		const adapted = chatRequestToResponses({
+			model: "gpt-5.6-luna",
+			prompt_cache_key: "thread-cache-key",
+			messages: [
+				{
+					role: "user",
+					content: [
+						{
+							type: "file",
+							file: {
+								file_data: "data:application/pdf;base64,UEZERg==",
+								filename: "brief.pdf",
+							},
+						},
+						{
+							type: "input_audio",
+							input_audio: { data: "UklGRg==", format: "wav" },
+						},
+						{
+							type: "image_url",
+							image_url: {
+								url: "https://example.com/input.png",
+								detail: "high",
+							},
+						},
+					],
+				},
+				{
+					role: "assistant",
+					content: null,
+					tool_calls: [
+						{
+							id: "call_patch",
+							type: "function",
+							function: {
+								name: "apply_patch",
+								arguments: "*** Begin Patch\n*** End Patch",
+							},
+						},
+					],
+				},
+				{
+					role: "tool",
+					tool_call_id: "call_patch",
+					content: [
+						{ type: "text", text: "done" },
+						{
+							type: "image_url",
+							image_url: {
+								url: "https://example.com/result.png",
+								detail: "low",
+							},
+						},
+						{
+							type: "file",
+							file: { file_id: "file_result", filename: "result.txt" },
+						},
+					],
+				},
+			],
+			tools: [
+				{
+					type: "custom",
+					name: "apply_patch",
+					description: "Apply a patch",
+					format: { type: "text" },
+				},
+				{ type: "web_search_preview" },
+				{
+					type: "function",
+					function: { name: "lookup", parameters: { type: "object" } },
+				},
+			],
+			tool_choice: {
+				type: "function",
+				function: { name: "apply_patch" },
+			},
+		});
+
+		expect(adapted.body.prompt_cache_key).toBe("thread-cache-key");
+		expect(adapted.body.tools).toEqual([
+			{
+				type: "custom",
+				name: "apply_patch",
+				description: "Apply a patch",
+				format: { type: "text" },
+			},
+			{ type: "web_search" },
+			{
+				type: "function",
+				name: "lookup",
+				parameters: { type: "object" },
+			},
+		]);
+		expect(adapted.body.tool_choice).toEqual({
+			type: "custom",
+			name: "apply_patch",
+		});
+
+		const items = adapted.body.input as Array<Record<string, unknown>>;
+		expect(items[0]).toMatchObject({
+			type: "message",
+			role: "user",
+			content: [
+				{
+					type: "input_file",
+					file_data: "data:application/pdf;base64,UEZERg==",
+					filename: "brief.pdf",
+				},
+				{ type: "input_audio", data: "UklGRg==", format: "wav" },
+				{
+					type: "input_image",
+					image_url: "https://example.com/input.png",
+					detail: "high",
+				},
+			],
+		});
+		expect(items[1]).toEqual({
+			type: "custom_tool_call",
+			call_id: "call_patch",
+			name: "apply_patch",
+			input: "*** Begin Patch\n*** End Patch",
+		});
+		expect(items[2]).toEqual({
+			type: "custom_tool_call_output",
+			call_id: "call_patch",
+			output: [
+				{ type: "input_text", text: "done" },
+				{
+					type: "input_image",
+					image_url: "https://example.com/result.png",
+					detail: "low",
+				},
+				{
+					type: "input_file",
+					file_id: "file_result",
+					filename: "result.txt",
+				},
+			],
+		});
+	});
+
+	it("converts custom tool output events into Chat-compatible function calls", () => {
+		const response = chatCompletionFromEvents(
+			[
+				{
+					type: "response.created",
+					response: {
+						id: "resp_custom",
+						created_at: CREATED_AT,
+						model: "gpt-5.6-luna",
+					},
+				},
+				{
+					type: "response.output_item.added",
+					output_index: 0,
+					item: {
+						id: "ct_patch",
+						type: "custom_tool_call",
+						call_id: "call_patch",
+						name: "apply_patch",
+					},
+				},
+				{
+					type: "response.custom_tool_call_input.delta",
+					item_id: "ct_patch",
+					delta: "*** Begin Patch\n",
+				},
+				{
+					type: "response.output_item.done",
+					output_index: 0,
+					item: {
+						id: "ct_patch",
+						type: "custom_tool_call",
+						call_id: "call_patch",
+						name: "apply_patch",
+						input: "*** Begin Patch\n*** End Patch",
+					},
+				},
+				{
+					type: "response.completed",
+					response: {
+						id: "resp_custom",
+						created_at: CREATED_AT,
+						model: "gpt-5.6-luna",
+						output: [],
+					},
+				},
+			],
+			"gpt-5.6-luna",
+		);
+
+		expect(response).toMatchObject({
+			choices: [
+				{
+					message: {
+						content: null,
+						tool_calls: [
+							{
+								id: "call_patch",
+								type: "function",
+								function: {
+									name: "apply_patch",
+									arguments: "*** Begin Patch\n*** End Patch",
+								},
+							},
+						],
+					},
+					finish_reason: "tool_calls",
+				},
+			],
+		});
+	});
+
+	it("prepares the canonical unary remote-compaction payload", () => {
+		const body = prepareCompactRequest({
+			model: "gpt-5.6-luna",
+			input: [
+				{
+					type: "message",
+					role: "system",
+					content: [{ type: "input_text", text: "compact this" }],
+				},
+			],
+			instructions: "retain decisions",
+			tools: [{ type: "web_search_preview" }],
+			parallel_tool_calls: false,
+			reasoning: { effort: "high" },
+			service_tier: "priority",
+			prompt_cache_key: "compact-cache-key",
+			text: { verbosity: "low" },
+			stream: true,
+			store: false,
+			include: ["reasoning.encrypted_content"],
+			client_metadata: { omit: true },
+		});
+
+		expect(body).toEqual({
+			model: "gpt-5.6-luna",
+			input: [
+				{
+					type: "message",
+					role: "developer",
+					content: [{ type: "input_text", text: "compact this" }],
+				},
+			],
+			instructions: "retain decisions",
+			tools: [{ type: "web_search" }],
+			parallel_tool_calls: false,
+			reasoning: { effort: "high" },
+			service_tier: "priority",
+			prompt_cache_key: "compact-cache-key",
+			text: { verbosity: "low" },
+		});
+	});
 });
 
 describe("Codex upstream bridge", () => {
@@ -471,6 +735,7 @@ describe("Codex upstream bridge", () => {
 					Version: "0.144.1",
 					"X-Codex-Beta-Features": "beta-a",
 					"X-Codex-Turn-Metadata": "turn-metadata",
+					"X-Codex-Turn-State": "turn-state-in",
 					"X-Request-Id": "request-id",
 					"X-Client-Request-Id": "client-request-id",
 					Session_id: "session-id",
@@ -522,6 +787,10 @@ describe("Codex upstream bridge", () => {
 		expect(outbound!.headers.get("x-codex-turn-metadata")).toBe(
 			"turn-metadata",
 		);
+		expect(outbound!.headers.get("x-codex-turn-state")).toBe(
+			"turn-state-in",
+		);
+		expect(outbound!.headers.get("session-id")).toBe("cache-key");
 		for (const name of [
 			"originator",
 			"user-agent",
@@ -542,6 +811,7 @@ describe("Codex upstream bridge", () => {
 		]);
 		expect(outbound!.body.instructions).toBe("");
 		expect(outbound!.body.custom_passthrough).toEqual({ keep: true });
+		expect(outbound!.body.prompt_cache_key).toBe("cache-key");
 		for (const name of [
 			"max_completion_tokens",
 			"max_output_tokens",
@@ -552,15 +822,112 @@ describe("Codex upstream bridge", () => {
 			"context_management",
 			"previous_response_id",
 			"generate",
-			"prompt_cache_key",
 			"prompt_cache_retention",
 			"safety_identifier",
 			"stream_options",
 			"session_id",
 			"conversation_id",
 		]) {
-			expect(outbound!.body, name).not.toHaveProperty(name);
+			 expect(outbound!.body, name).not.toHaveProperty(name);
 		}
+	});
+
+	it("proxies Codex remote compaction as a unary JSON request", async () => {
+		let outbound:
+			| {
+					headers: Headers;
+					body: Record<string, unknown>;
+			  }
+			| undefined;
+		fetchMock
+			.get("https://codex-relay.test")
+			.intercept({
+				path: "/backend-api/codex/responses/compact",
+				method: "POST",
+			})
+			.reply((options) => {
+				outbound = {
+					headers: new Headers(options.headers as HeadersInit),
+					body: JSON.parse(String(options.body)) as Record<string, unknown>,
+				};
+				return {
+					statusCode: 200,
+					data: JSON.stringify({
+						output: [
+							{
+								type: "compaction",
+								encrypted_content: "encrypted-summary",
+							},
+						],
+					}),
+					responseOptions: {
+						headers: {
+							"Content-Type": "application/json",
+							"X-Codex-Turn-State": "compact-turn-state-out",
+						},
+					},
+				};
+			});
+
+		const response = await SELF.fetch(
+			"https://example.com/v1/responses/compact",
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Codex-Turn-State": "compact-turn-state-in",
+				},
+				body: JSON.stringify({
+					model: "gpt-5.6-luna",
+					input: [
+						{
+							type: "message",
+							role: "system",
+							content: [{ type: "input_text", text: "history" }],
+						},
+					],
+					instructions: "retain decisions",
+					parallel_tool_calls: true,
+					reasoning: { effort: "medium", summary: "auto" },
+					service_tier: "priority",
+					prompt_cache_key: "compact-cache-key",
+				}),
+			},
+		);
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get("x-codex-turn-state")).toBe(
+			"compact-turn-state-out",
+		);
+		expect(await response.json()).toEqual({
+			output: [
+				{
+					type: "compaction",
+					encrypted_content: "encrypted-summary",
+				},
+			],
+		});
+		expect(outbound).toBeDefined();
+		expect(outbound!.headers.get("accept")).toBe("application/json");
+		expect(outbound!.headers.get("session-id")).toBe("compact-cache-key");
+		expect(outbound!.headers.get("x-codex-turn-state")).toBe(
+			"compact-turn-state-in",
+		);
+		expect(outbound!.body).toEqual({
+			model: "gpt-5.6-luna",
+			input: [
+				{
+					type: "message",
+					role: "developer",
+					content: [{ type: "input_text", text: "history" }],
+				},
+			],
+			instructions: "retain decisions",
+			parallel_tool_calls: true,
+			reasoning: { effort: "medium", summary: "auto" },
+			service_tier: "priority",
+			prompt_cache_key: "compact-cache-key",
+		});
 	});
 
 	it("forwards Responses SSE without collecting when stream is omitted", async () => {
@@ -577,6 +944,31 @@ describe("Codex upstream bridge", () => {
 		});
 		expect(response.status).toBe(200);
 		expect(response.headers.get("content-type")).toContain("text/event-stream");
+		expect(await response.text()).toBe(upstreamSse);
+	});
+
+	it("accepts the zstd request bodies emitted by Codex", async () => {
+		const upstreamSse = sseResponse();
+		mockCodex(upstreamSse);
+		const body = zstdCompressSync(
+			Buffer.from(
+				JSON.stringify({
+					model: "gpt-5.6-luna",
+					input: "compressed Codex request",
+					prompt_cache_key: "compressed-cache-key",
+				}),
+			),
+		);
+		const response = await SELF.fetch("https://example.com/v1/responses", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"Content-Encoding": "zstd",
+			},
+			body,
+		});
+
+		expect(response.status).toBe(200);
 		expect(await response.text()).toBe(upstreamSse);
 	});
 
@@ -653,6 +1045,37 @@ describe("Codex upstream bridge", () => {
 		expect(stream).toContain("data: [DONE]");
 	});
 
+	it("streams custom tool input through Chat-compatible tool call deltas", async () => {
+		mockCodex(customToolSseResponse());
+		const response = await SELF.fetch(
+			"https://example.com/v1/chat/completions",
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					model: "gpt-5.6-luna",
+					stream: true,
+					messages: [{ role: "user", content: "Patch the file." }],
+					tools: [
+						{
+							type: "custom",
+							name: "apply_patch",
+							format: { type: "text" },
+						},
+					],
+				}),
+			},
+		);
+
+		expect(response.status).toBe(200);
+		const stream = await response.text();
+		expect(stream).toContain('"name":"apply_patch"');
+		expect(stream).toContain('"arguments":"*** Begin Patch\\n"');
+		expect(stream).toContain('"arguments":"*** End Patch"');
+		expect(stream).toContain('"finish_reason":"tool_calls"');
+		expect(stream).toContain("data: [DONE]");
+	});
+
 	it("does not refresh tokens after an upstream 401", async () => {
 		mockCodex(
 			JSON.stringify({ error: { message: "Unauthorized" } }),
@@ -718,6 +1141,63 @@ function sseResponse(): string {
 		`data: ${JSON.stringify({
 			type: "response.completed",
 			response: { ...COMPLETED_RESPONSE, output: [] },
+		})}`,
+		"data: [DONE]",
+		"",
+	].join("\n\n");
+}
+
+function customToolSseResponse(): string {
+	return [
+		`data: ${JSON.stringify({
+			type: "response.created",
+			response: {
+				id: "resp_custom_stream",
+				created_at: CREATED_AT,
+				model: "gpt-5.6-luna",
+			},
+		})}`,
+		`data: ${JSON.stringify({
+			type: "response.output_item.added",
+			output_index: 0,
+			item: {
+				id: "ct_stream",
+				type: "custom_tool_call",
+				call_id: "call_stream",
+				name: "apply_patch",
+			},
+		})}`,
+		`data: ${JSON.stringify({
+			type: "response.custom_tool_call_input.delta",
+			item_id: "ct_stream",
+			output_index: 0,
+			delta: "*** Begin Patch\n",
+		})}`,
+		`data: ${JSON.stringify({
+			type: "response.custom_tool_call_input.delta",
+			item_id: "ct_stream",
+			output_index: 0,
+			delta: "*** End Patch",
+		})}`,
+		`data: ${JSON.stringify({
+			type: "response.output_item.done",
+			output_index: 0,
+			item: {
+				id: "ct_stream",
+				type: "custom_tool_call",
+				call_id: "call_stream",
+				name: "apply_patch",
+				input: "*** Begin Patch\n*** End Patch",
+			},
+		})}`,
+		`data: ${JSON.stringify({
+			type: "response.completed",
+			response: {
+				id: "resp_custom_stream",
+				created_at: CREATED_AT,
+				model: "gpt-5.6-luna",
+				output: [],
+			},
 		})}`,
 		"data: [DONE]",
 		"",
