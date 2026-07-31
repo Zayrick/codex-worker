@@ -15,7 +15,13 @@ import {
 	requireRecord,
 } from "./errors";
 import { collectSseEvents } from "./sse";
-import type { WorkerEnv } from "./types";
+import {
+	isRecord,
+	numberField,
+	stringField,
+	type JsonObject,
+	type WorkerEnv,
+} from "./types";
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
@@ -60,12 +66,15 @@ export default {
 			authenticateClient(request, env);
 
 			if (request.method === "GET" && url.pathname === "/v1/models") {
+				const codexClient = url.searchParams.has("client_version");
 				const upstream = await requestCodexModels(url, env, {
 					headers: request.headers,
 					signal: request.signal,
 				});
 				return finalize(
-					upstreamJson(upstream),
+					codexClient
+						? upstreamJson(upstream)
+						: json(await openAiModelList(upstream)),
 					env,
 				);
 			}
@@ -211,6 +220,42 @@ function upstreamJson(response: Response): Response {
 			"Cache-Control": "no-store",
 		},
 	});
+}
+
+async function openAiModelList(response: Response): Promise<JsonObject> {
+	let payload: unknown;
+	try {
+		payload = await response.json();
+	} catch {
+		throw invalidModelCatalog();
+	}
+	if (!isRecord(payload) || !Array.isArray(payload.models)) {
+		throw invalidModelCatalog();
+	}
+
+	const data: JsonObject[] = [];
+	for (const value of payload.models) {
+		if (!isRecord(value)) continue;
+		const id = stringField(value, "id") ?? stringField(value, "slug");
+		if (!id) continue;
+
+		const model: JsonObject = { id, object: "model" };
+		const created = numberField(value, "created");
+		if (created !== undefined) model.created = created;
+		const ownedBy = stringField(value, "owned_by");
+		if (ownedBy) model.owned_by = ownedBy;
+		data.push(model);
+	}
+	return { object: "list", data };
+}
+
+function invalidModelCatalog(): ApiError {
+	return new ApiError(
+		502,
+		"The Codex backend returned an invalid model catalog.",
+		"upstream_error",
+		"invalid_codex_model_catalog",
+	);
 }
 
 function sseHeaders(): HeadersInit {

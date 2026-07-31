@@ -18,11 +18,12 @@ Responses 始终直接返回 Codex SSE，不聚合为 JSON。Chat Completions �
 `stream` 返回 JSON 或 SSE，并兼容 system/developer 消息、函数工具、图片输入、
 结构化输出和 usage。
 
-`GET /v1/models` 会请求 relay 的 `/backend-api/codex/models`，并将上游
-Codex 模型目录原样返回。查询参数会透传，但认证、会话、请求追踪和指纹类参数
-会被丢弃。上游必需的 `client_version` 优先取查询参数，其次取 `Version` 请求头，
-两者都没有时使用 CLIProxyAPI 的默认值 `0.144.1`。项目不再维护静态模型列表、
-模型别名或单模型查询结果。
+`GET /v1/models` 会请求 relay 的 `/backend-api/codex/models`。客户端原始查询
+带 `client_version` 时，上游 Codex `{models}` 目录原样返回；不带时，Worker 在
+请求上游后转换成 OpenAI `{object: "list", data: [...]}`。查询参数会透传，但
+认证、会话、请求追踪和指纹类参数会被丢弃。上游必需的 `client_version` 优先取
+查询参数，其次取 `Version` 请求头，两者都没有时使用 CLIProxyAPI 的默认值
+`0.144.1`。项目不再维护静态模型列表、模型别名或单模型查询结果。
 
 ## 上游请求
 
@@ -35,6 +36,8 @@ Codex 模型目录原样返回。查询参数会透传，但认证、会话、�
   或 `Originator`；
 - 不注入默认系统提示词。客户端提供的 `instructions` 会保留，Chat Completions
   中的 system 消息只做 Codex 必需的 `developer` 角色转换；
+- Chat Completions 的 `reasoning_effort` 仅转换为 `reasoning.effort`，不限制
+  强度枚举、不补默认值，也不自动添加 reasoning summary；
 - Responses 请求默认透传其他字段，只删除 Codex 不支持或带身份/会话状态的字段。
   同时按上游要求固定 `stream: true`、`store: false`、
   `parallel_tool_calls: true` 和

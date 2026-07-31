@@ -9,16 +9,6 @@ import {
 	type JsonObject,
 } from "./types";
 
-const REASONING_EFFORTS = new Set([
-	"none",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-	"ultra",
-]);
-
 export interface AdaptedChatRequest {
 	body: JsonObject;
 	model: string;
@@ -90,13 +80,10 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 
 	const reasoningEffort = input.reasoning_effort;
 	if (reasoningEffort !== undefined) {
-		if (
-			typeof reasoningEffort !== "string" ||
-			!REASONING_EFFORTS.has(reasoningEffort)
-		) {
+		if (typeof reasoningEffort !== "string" || reasoningEffort.length === 0) {
 			throw new ApiError(
 				400,
-				"'reasoning_effort' must be one of none, low, medium, high, xhigh, max, or ultra.",
+				"'reasoning_effort' must be a non-empty string.",
 				"invalid_request_error",
 				"invalid_reasoning_effort",
 				"reasoning_effort",

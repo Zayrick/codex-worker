@@ -84,7 +84,7 @@ describe("routing and model compatibility", () => {
 		fetchMock
 			.get("https://codex-relay.test")
 			.intercept({
-				path: "/backend-api/codex/models?client_version=0.144.1&channel=stable",
+				path: "/backend-api/codex/models?client_version=0.200.0&channel=stable",
 				method: "GET",
 			})
 			.reply((options) => {
@@ -103,7 +103,7 @@ describe("routing and model compatibility", () => {
 			});
 
 		const response = await SELF.fetch(
-			"https://example.com/v1/models?client_version=0.144.1&channel=stable&session_id=drop-me&api_key=drop-me",
+			"https://example.com/v1/models?client_version=0.200.0&channel=stable&session_id=drop-me&api_key=drop-me",
 			{
 				headers: {
 					Version: "0.144.1",
@@ -175,7 +175,10 @@ describe("routing and model compatibility", () => {
 
 		const response = await SELF.fetch("https://example.com/v1/models");
 		expect(response.status).toBe(200);
-		expect(await response.json()).toEqual(CODEX_MODELS);
+		expect(await response.json()).toEqual({
+			object: "list",
+			data: [{ id: "gpt-5.6-luna", object: "model" }],
+		});
 	});
 
 	it("enforces an optional downstream proxy API key", async () => {
@@ -206,6 +209,10 @@ describe("request adaptation", () => {
 					content: [{ type: "input_text", text: "Client instruction" }],
 				},
 			],
+			reasoning: {
+				effort: "future-responses-level",
+				summary: "detailed",
+			},
 			custom_passthrough: { keep: true },
 			include: ["file_search_call.results"],
 			store: true,
@@ -242,6 +249,10 @@ describe("request adaptation", () => {
 		expect(body).toMatchObject({
 			model: "gpt-5.6-lunar",
 			instructions: "",
+			reasoning: {
+				effort: "future-responses-level",
+				summary: "detailed",
+			},
 			custom_passthrough: { keep: true },
 			store: false,
 			stream: true,
@@ -407,7 +418,20 @@ describe("request adaptation", () => {
 			messages: [],
 		});
 		expect(adapted.body.input).toEqual([]);
+		expect(adapted.body).not.toHaveProperty("reasoning");
 	});
+
+	it.each(["minimal", "future-reasoning-level"])(
+		"forwards reasoning_effort %s without a local enum restriction",
+		(reasoningEffort) => {
+			const adapted = chatRequestToResponses({
+				model: "gpt-5.6-luna",
+				messages: [{ role: "user", content: "hello" }],
+				reasoning_effort: reasoningEffort,
+			});
+			expect(adapted.body.reasoning).toEqual({ effort: reasoningEffort });
+		},
+	);
 });
 
 describe("Codex upstream bridge", () => {
