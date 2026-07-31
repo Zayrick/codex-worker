@@ -7,14 +7,17 @@
 	"name": "codex-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-31",
-	"observability": {
+		"observability": {
 		"enabled": true
 	},
 	"upload_source_maps": true,
 	"compatibility_flags": [
 		"nodejs_compat"
-	]
-	/**
+	],
+	"vars": {
+		"CODEX_RELAY_URL": "https://codex-relay.oxio.uno/backend-api/codex/responses"
+	}
+		/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
 	 */
