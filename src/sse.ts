@@ -1,11 +1,4 @@
-import { ApiError } from "./errors";
-import {
-	isRecord,
-	numberField,
-	recordField,
-	stringField,
-	type JsonObject,
-} from "./types";
+import { isRecord, type JsonObject } from "./types";
 
 export class SseDecoder {
 	private buffer = "";
@@ -59,69 +52,6 @@ export async function collectSseEvents(
 	} finally {
 		reader.releaseLock();
 	}
-}
-
-export function completedResponseFromEvents(
-	events: readonly JsonObject[],
-): JsonObject {
-	let terminalResponse: JsonObject | undefined;
-	const outputItems = new Map<
-		string,
-		{ index: number; item: JsonObject }
-	>();
-	for (const event of events) {
-		const type = stringField(event, "type") ?? "";
-		if (
-			type === "response.output_item.added" ||
-			type === "response.output_item.done"
-		) {
-			const item = recordField(event, "item");
-			if (item) {
-				const index = numberField(event, "output_index") ?? outputItems.size;
-				const key = stringField(item, "id") ?? String(index);
-				outputItems.set(key, { index, item });
-			}
-		}
-		if (
-			type === "response.completed" ||
-			type === "response.incomplete" ||
-			type === "response.failed"
-		) {
-			terminalResponse = recordField(event, "response");
-		}
-		if (type === "error" || type === "response.failed") {
-			const error =
-				recordField(event, "error") ??
-				recordField(recordField(event, "response"), "error");
-			throw new ApiError(
-				502,
-				stringField(error, "message") ?? "The Codex response stream failed.",
-				"upstream_error",
-				stringField(error, "code") ?? "codex_stream_failed",
-			);
-		}
-	}
-
-	if (!terminalResponse) {
-		throw new ApiError(
-			502,
-			"The Codex response stream ended before a terminal response event.",
-			"upstream_error",
-			"incomplete_codex_stream",
-		);
-	}
-	if (
-		Array.isArray(terminalResponse.output) &&
-		terminalResponse.output.length > 0
-	) {
-		return terminalResponse;
-	}
-	const reconstructedOutput = [...outputItems.values()]
-		.sort((left, right) => left.index - right.index)
-		.map(({ item }) => item);
-	return reconstructedOutput.length > 0
-		? { ...terminalResponse, output: reconstructedOutput }
-		: terminalResponse;
 }
 
 export function sseData(value: unknown): Uint8Array {

@@ -3,24 +3,26 @@ import {
 	chatRequestToResponses,
 	createChatCompletionStream,
 } from "./chat";
-import { prepareResponsesRequest, requestCodex } from "./codex";
+import {
+	prepareResponsesRequest,
+	requestCodex,
+	requestCodexModels,
+} from "./codex";
 import {
 	ApiError,
 	errorPayload,
 	normalizeError,
 	requireRecord,
 } from "./errors";
-import { findModel, modelObject, MODELS } from "./models";
-import { collectSseEvents, completedResponseFromEvents } from "./sse";
+import { collectSseEvents } from "./sse";
 import type { WorkerEnv } from "./types";
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
-		const requestId = crypto.randomUUID();
 		try {
 			const url = new URL(request.url);
 			if (request.method === "OPTIONS") {
-				return finalize(new Response(null, { status: 204 }), request, env, requestId);
+				return finalize(new Response(null, { status: 204 }), env);
 			}
 
 			if (request.method === "GET" && url.pathname === "/") {
@@ -28,7 +30,8 @@ export default {
 					json({
 						name: "codex-worker",
 						status: "ok",
-						compatibility: "OpenAI-compatible subset",
+						compatibility:
+							"Codex Responses passthrough with an OpenAI Chat Completions adapter",
 						endpoints: [
 							"GET /v1/models",
 							"POST /v1/responses",
@@ -39,9 +42,7 @@ export default {
 							: "disabled",
 						token_refresh: "disabled",
 					}),
-					request,
 					env,
-					requestId,
 				);
 			}
 
@@ -52,77 +53,40 @@ export default {
 						codex_auth_configured: Boolean(env.CODEX_AUTH_JSON),
 						token_refresh: false,
 					}),
-					request,
 					env,
-					requestId,
 				);
 			}
 
 			authenticateClient(request, env);
 
 			if (request.method === "GET" && url.pathname === "/v1/models") {
+				const upstream = await requestCodexModels(url, env, {
+					headers: request.headers,
+					signal: request.signal,
+				});
 				return finalize(
-					json({
-						object: "list",
-						data: MODELS.map(modelObject),
-					}),
-					request,
+					upstreamJson(upstream),
 					env,
-					requestId,
-				);
-			}
-
-			if (
-				request.method === "GET" &&
-				url.pathname.startsWith("/v1/models/")
-			) {
-				const requested = decodeURIComponent(
-					url.pathname.slice("/v1/models/".length),
-				);
-				const model = findModel(requested);
-				if (!model) {
-					throw new ApiError(
-						404,
-						`The model '${requested}' does not exist in this proxy's model catalog.`,
-						"invalid_request_error",
-						"model_not_found",
-						"model",
-					);
-				}
-				return finalize(
-					json(modelObject(model)),
-					request,
-					env,
-					requestId,
 				);
 			}
 
 			if (request.method === "POST" && url.pathname === "/v1/responses") {
 				const input = await parseJsonBody(request);
-				const adapted = prepareResponsesRequest(input);
+				const body = prepareResponsesRequest(input);
 				const upstream = await requestCodex(
-					adapted.body,
+					body,
 					env,
-					request.signal,
+					{
+						headers: request.headers,
+						signal: request.signal,
+					},
 				);
-				if (adapted.stream) {
-					return finalize(
-						new Response(upstream.body, {
-							status: 200,
-							headers: sseHeaders(),
-						}),
-						request,
-						env,
-						requestId,
-					);
-				}
-
-				const events = await collectSseEvents(upstream.body!);
 				return finalize(
-					json(completedResponseFromEvents(events)),
-					request,
+					new Response(upstream.body, {
+						status: 200,
+						headers: sseHeaders(),
+					}),
 					env,
-					requestId,
 				);
 			}
 
@@ -135,7 +99,10 @@ export default {
 				const upstream = await requestCodex(
 					adapted.body,
 					env,
-					request.signal,
+					{
+						headers: request.headers,
+						signal: request.signal,
+					},
 				);
 				if (adapted.stream) {
 					return finalize(
@@ -153,18 +120,14 @@ export default {
 								headers: sseHeaders(),
 							},
 						),
-						request,
 						env,
-						requestId,
 					);
 				}
 
 				const events = await collectSseEvents(upstream.body!);
 				return finalize(
 					json(chatCompletionFromEvents(events, adapted.model)),
-					request,
 					env,
-					requestId,
 				);
 			}
 
@@ -178,9 +141,7 @@ export default {
 			const apiError = normalizeError(error);
 			return finalize(
 				json(errorPayload(apiError), apiError.status),
-				request,
 				env,
-				requestId,
 			);
 		}
 	},
@@ -239,6 +200,19 @@ function json(value: unknown, status = 200): Response {
 	});
 }
 
+function upstreamJson(response: Response): Response {
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers: {
+			"Content-Type":
+				response.headers.get("Content-Type") ??
+				"application/json; charset=utf-8",
+			"Cache-Control": "no-store",
+		},
+	});
+}
+
 function sseHeaders(): HeadersInit {
 	return {
 		"Content-Type": "text/event-stream; charset=utf-8",
@@ -248,21 +222,15 @@ function sseHeaders(): HeadersInit {
 
 function finalize(
 	response: Response,
-	request: Request,
 	env: WorkerEnv,
-	requestId: string,
 ): Response {
 	const headers = new Headers(response.headers);
-	const origin = request.headers.get("Origin");
 	headers.set("Access-Control-Allow-Origin", env.CORS_ORIGIN || "*");
 	headers.set(
 		"Access-Control-Allow-Headers",
-		"Authorization, Content-Type, X-Api-Key",
+		"Authorization, Content-Type, X-Api-Key, Version, X-Codex-Beta-Features, X-Codex-Turn-Metadata",
 	);
 	headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-	headers.set("Access-Control-Expose-Headers", "X-Request-Id");
-	headers.set("X-Request-Id", requestId);
-	if (origin) headers.append("Vary", "Origin");
 	return new Response(response.body, {
 		status: response.status,
 		statusText: response.statusText,

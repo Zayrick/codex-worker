@@ -1,6 +1,5 @@
 import { getCodexCredentials } from "./auth";
 import { ApiError, requireString } from "./errors";
-import { resolveModelId } from "./models";
 import {
 	isRecord,
 	recordField,
@@ -9,18 +8,67 @@ import {
 	type WorkerEnv,
 } from "./types";
 
-const DEFAULT_INSTRUCTIONS = "You are a helpful assistant.";
+const FORWARDED_CODEX_HEADERS = [
+	"Version",
+	"X-Codex-Beta-Features",
+	"X-Codex-Turn-Metadata",
+] as const;
 
-export interface AdaptedResponsesRequest {
-	body: JsonObject;
-	model: string;
-	stream: boolean;
+const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
+
+const REMOVED_REQUEST_FIELDS = new Set([
+	"contextmanagement",
+	"conversationid",
+	"generate",
+	"maxcompletiontokens",
+	"maxoutputtokens",
+	"maxtokens",
+	"originator",
+	"previousresponseid",
+	"promptcachekey",
+	"promptcacheretention",
+	"requestid",
+	"safetyidentifier",
+	"sessionid",
+	"streamoptions",
+	"temperature",
+	"topk",
+	"topp",
+	"truncation",
+	"user",
+	"useragent",
+	"xclientrequestid",
+	"xrequestid",
+]);
+
+const REMOVED_MODEL_QUERY_FIELDS = new Set([
+	"accesstoken",
+	"apikey",
+	"authorization",
+	"conversationid",
+	"cookie",
+	"idtoken",
+	"promptcachekey",
+	"proxyauthorization",
+	"refreshtoken",
+	"requestid",
+	"sessionid",
+	"token",
+	"useragent",
+	"xapikey",
+	"xclientrequestid",
+	"xrequestid",
+]);
+
+export interface CodexRequestOptions {
+	headers?: Headers;
+	signal?: AbortSignal;
 }
 
 export function prepareResponsesRequest(
 	input: JsonObject,
-): AdaptedResponsesRequest {
-	const model = resolveModelId(requireString(input.model, "model"));
+): JsonObject {
+	const model = requireString(input.model, "model");
 	if (!Object.prototype.hasOwnProperty.call(input, "input")) {
 		throw new ApiError(
 			400,
@@ -50,69 +98,157 @@ export function prepareResponsesRequest(
 		);
 	}
 
-	const include = Array.isArray(input.include)
-		? input.include.filter((value): value is string => typeof value === "string")
-		: [];
-	if (!include.includes("reasoning.encrypted_content")) {
-		include.push("reasoning.encrypted_content");
-	}
-
-	const body: JsonObject = {
+	return prepareCodexRequestBody({
 		...input,
 		input: responseInput,
 		model,
-		instructions:
-			typeof input.instructions === "string"
-				? input.instructions
-				: DEFAULT_INSTRUCTIONS,
-		store: false,
-		stream: true,
-		include,
-	};
-	// This private backend currently responds with
-	// "Unsupported parameter: max_output_tokens".
-	delete body.max_output_tokens;
+	});
+}
 
-	return {
-		model,
-		stream: input.stream === true,
-		body,
-	};
+export function prepareCodexRequestBody(input: JsonObject): JsonObject {
+	const body: JsonObject = { ...input };
+	for (const key of Object.keys(body)) {
+		if (REMOVED_REQUEST_FIELDS.has(normalizeName(key))) {
+			delete body[key];
+		}
+	}
+
+	if (body.service_tier !== "priority") {
+		delete body.service_tier;
+	}
+
+	body.input = normalizeSystemRoles(body.input);
+	normalizeBuiltinTools(body);
+	if (body.instructions === undefined || body.instructions === null) {
+		body.instructions = "";
+	}
+	body.store = false;
+	body.stream = true;
+	body.parallel_tool_calls = true;
+	body.include = ["reasoning.encrypted_content"];
+	return body;
 }
 
 export async function requestCodex(
 	body: JsonObject,
 	env: WorkerEnv,
-	signal?: AbortSignal,
+	options: CodexRequestOptions = {},
 ): Promise<Response> {
 	const credentials = getCodexCredentials(env);
-	const sessionId = crypto.randomUUID();
 	const upstreamUrl = resolveRelayUrl(env.CODEX_RELAY_URL);
+	return fetchCodex(
+		upstreamUrl,
+		{
+			method: "POST",
+			headers: codexHeaders(
+				credentials,
+				"text/event-stream",
+				options.headers,
+				true,
+			),
+			body: JSON.stringify(prepareCodexRequestBody(body)),
+			signal: options.signal,
+		},
+	);
+}
+
+export async function requestCodexModels(
+	clientUrl: URL,
+	env: WorkerEnv,
+	options: CodexRequestOptions = {},
+): Promise<Response> {
+	const credentials = getCodexCredentials(env);
+	const upstreamUrl = resolveModelsUrl(
+		env.CODEX_RELAY_URL,
+		clientUrl,
+		options.headers,
+	);
+	return fetchCodex(
+		upstreamUrl,
+		{
+			method: "GET",
+			headers: codexHeaders(
+				credentials,
+				"application/json",
+				options.headers,
+				false,
+			),
+			signal: options.signal,
+		},
+	);
+}
+
+function codexHeaders(
+	credentials: { token: string; accountId?: string },
+	accept: string,
+	source: Headers | undefined,
+	hasJsonBody: boolean,
+): Headers {
+	const headers = new Headers({
+		Accept: accept,
+		Authorization: `Bearer ${credentials.token}`,
+	});
+	if (hasJsonBody) {
+		headers.set("Content-Type", "application/json");
+	}
+	if (credentials.accountId) {
+		headers.set("Chatgpt-Account-Id", credentials.accountId);
+	}
+	for (const name of FORWARDED_CODEX_HEADERS) {
+		const value = source?.get(name)?.trim();
+		if (value) headers.set(name, value);
+	}
+	return headers;
+}
+
+function normalizeSystemRoles(value: unknown): unknown {
+	if (!Array.isArray(value)) return value;
+	return value.map((item) =>
+		isRecord(item) && item.role === "system"
+			? { ...item, role: "developer" }
+			: item,
+	);
+}
+
+function normalizeBuiltinTools(body: JsonObject): void {
+	if (Object.prototype.hasOwnProperty.call(body, "tools")) {
+		body.tools = normalizeToolArray(body.tools);
+	}
+	if (!isRecord(body.tool_choice)) return;
+
+	const toolChoice = { ...body.tool_choice };
+	const normalizedType = normalizeBuiltinToolType(toolChoice.type);
+	if (normalizedType) toolChoice.type = normalizedType;
+	if (Object.prototype.hasOwnProperty.call(toolChoice, "tools")) {
+		toolChoice.tools = normalizeToolArray(toolChoice.tools);
+	}
+	body.tool_choice = toolChoice;
+}
+
+function normalizeToolArray(value: unknown): unknown {
+	if (!Array.isArray(value)) return value;
+	return value.map((tool) => {
+		if (!isRecord(tool)) return tool;
+		const normalizedType = normalizeBuiltinToolType(tool.type);
+		return normalizedType ? { ...tool, type: normalizedType } : tool;
+	});
+}
+
+function normalizeBuiltinToolType(value: unknown): string | undefined {
+	return value === "web_search_preview" ||
+		value === "web_search_preview_2025_03_11"
+		? "web_search"
+		: undefined;
+}
+
+function normalizeName(value: string): string {
+	return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+async function fetchCodex(url: URL, init: RequestInit): Promise<Response> {
 	let response: Response;
 	try {
-		response = await fetch(upstreamUrl, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${credentials.token}`,
-				Accept: "text/event-stream",
-				"Content-Type": "application/json",
-				"User-Agent": "codex-worker/0.1.0",
-				Originator: "codex-worker",
-				Session_id: sessionId,
-				Conversation_id: sessionId,
-				...(credentials.accountId
-					? { "Chatgpt-Account-Id": credentials.accountId }
-					: {}),
-			},
-			body: JSON.stringify({
-				...body,
-				prompt_cache_key:
-					typeof body.prompt_cache_key === "string"
-						? body.prompt_cache_key
-						: sessionId,
-			}),
-			signal,
-		});
+		response = await fetch(url, init);
 	} catch (error) {
 		if (error instanceof DOMException && error.name === "AbortError") throw error;
 		throw new ApiError(
@@ -171,7 +307,7 @@ export async function requestCodex(
 	);
 }
 
-function resolveRelayUrl(relayUrl: string): string {
+function resolveRelayUrl(relayUrl: string): URL {
 	let url: URL;
 	try {
 		url = new URL(relayUrl);
@@ -196,7 +332,38 @@ function resolveRelayUrl(relayUrl: string): string {
 			"unsafe_relay_url",
 		);
 	}
-	return url.toString();
+	if (!/\/responses\/?$/.test(url.pathname)) {
+		throw new ApiError(
+			500,
+			"CODEX_RELAY_URL must end in /responses.",
+			"configuration_error",
+			"invalid_relay_path",
+		);
+	}
+	return url;
+}
+
+function resolveModelsUrl(
+	relayUrl: string,
+	clientUrl: URL,
+	clientHeaders: Headers | undefined,
+): URL {
+	const url = resolveRelayUrl(relayUrl);
+	url.pathname = url.pathname.replace(/\/responses\/?$/, "/models");
+
+	url.search = "";
+	const clientVersion =
+		clientUrl.searchParams.get("client_version")?.trim() ||
+		clientHeaders?.get("Version")?.trim() ||
+		DEFAULT_CODEX_CLIENT_VERSION;
+	url.searchParams.set("client_version", clientVersion);
+	for (const [name, value] of clientUrl.searchParams) {
+		if (name === "client_version") continue;
+		if (!REMOVED_MODEL_QUERY_FIELDS.has(normalizeName(name))) {
+			url.searchParams.append(name, value);
+		}
+	}
+	return url;
 }
 
 async function upstreamErrorMessage(response: Response): Promise<string> {

@@ -1,5 +1,5 @@
 import { ApiError, requireRecord, requireString } from "./errors";
-import { resolveModelId } from "./models";
+import { prepareCodexRequestBody } from "./codex";
 import { SSE_DONE, SseDecoder, sseData } from "./sse";
 import {
 	isRecord,
@@ -9,7 +9,6 @@ import {
 	type JsonObject,
 } from "./types";
 
-const DEFAULT_INSTRUCTIONS = "You are a helpful assistant.";
 const REASONING_EFFORTS = new Set([
 	"none",
 	"low",
@@ -51,7 +50,7 @@ interface ChatState {
 }
 
 export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
-	const model = resolveModelId(requireString(input.model, "model"));
+	const model = requireString(input.model, "model");
 	const messages = input.messages;
 	if (!Array.isArray(messages)) {
 		throw new ApiError(
@@ -63,59 +62,30 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 		);
 	}
 
-	const instructions: string[] = [];
 	const responseInput: JsonObject[] = [];
 	for (let index = 0; index < messages.length; index++) {
 		const message = requireRecord(messages[index], `messages[${index}]`);
-		const role = requireString(
+		const sourceRole = requireString(
 			message.role,
 			`messages[${index}].role`,
 			`messages[${index}].role must be a string.`,
 		);
-		if (role === "system" || role === "developer") {
-			const text = instructionText(
-				message.content,
-				`messages[${index}].content`,
-			);
-			if (text) instructions.push(text);
-			continue;
-		}
+		const role = sourceRole === "system" ? "developer" : sourceRole;
 		responseInput.push(...messageToResponseItems(message, role, index));
-	}
-
-	if (responseInput.length === 0) {
-		responseInput.push({
-			type: "message",
-			role: "user",
-			content: [{ type: "input_text", text: "" }],
-		});
 	}
 
 	const body: JsonObject = {
 		model,
-		instructions: instructions.join("\n\n") || DEFAULT_INSTRUCTIONS,
+		instructions: "",
 		input: responseInput,
-		store: false,
-		stream: true,
-		include: ["reasoning.encrypted_content"],
 	};
 
 	const tools = adaptTools(input.tools);
 	if (tools.length > 0) {
 		body.tools = tools;
+	}
+	if (input.tool_choice !== undefined) {
 		body.tool_choice = adaptToolChoice(input.tool_choice);
-		body.parallel_tool_calls =
-			typeof input.parallel_tool_calls === "boolean"
-				? input.parallel_tool_calls
-				: true;
-	} else if (input.tool_choice !== undefined && input.tool_choice !== "none") {
-		throw new ApiError(
-			400,
-			"'tool_choice' requires at least one function tool.",
-			"invalid_request_error",
-			"invalid_tool_choice",
-			"tool_choice",
-		);
 	}
 
 	const reasoningEffort = input.reasoning_effort;
@@ -132,32 +102,12 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 				"reasoning_effort",
 			);
 		}
-		body.reasoning = { effort: reasoningEffort, summary: "auto" };
-	}
-
-	const maxOutputTokens = input.max_completion_tokens ?? input.max_tokens;
-	if (maxOutputTokens !== undefined) {
-		if (
-			typeof maxOutputTokens !== "number" ||
-			!Number.isInteger(maxOutputTokens) ||
-			maxOutputTokens <= 0
-		) {
-			throw new ApiError(
-				400,
-				"'max_completion_tokens' must be a positive integer.",
-				"invalid_request_error",
-				"invalid_max_tokens",
-				"max_completion_tokens",
-			);
-		}
-		// The ChatGPT Codex backend currently rejects max_output_tokens even
-		// though it is valid on the public Responses API. Accept the compatibility
-		// parameter without forwarding it.
+		body.reasoning = { effort: reasoningEffort };
 	}
 
 	const text = adaptResponseFormat(input.response_format);
 	if (text) body.text = text;
-	if (input.service_tier !== undefined) body.service_tier = input.service_tier;
+	if (input.service_tier === "priority") body.service_tier = "priority";
 	if (isRecord(input.metadata)) body.metadata = input.metadata;
 
 	if (
@@ -178,7 +128,7 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 		? input.stream_options
 		: undefined;
 	return {
-		body,
+		body: prepareCodexRequestBody(body),
 		model,
 		stream,
 		includeUsage: streamOptions?.include_usage === true,
@@ -200,6 +150,7 @@ export function chatCompletionFromEvents(
 			"incomplete_codex_stream",
 		);
 	}
+	requireChatResponseId(state);
 
 	const extracted = state.response
 		? extractCompletedOutput(state.response)
@@ -336,7 +287,7 @@ function messageToResponseItems(
 		];
 	}
 
-	if (role !== "user" && role !== "assistant") {
+	if (role !== "user" && role !== "assistant" && role !== "developer") {
 		throw new ApiError(
 			400,
 			`Unsupported message role '${role}'.`,
@@ -396,7 +347,7 @@ function messageToResponseItems(
 
 function adaptMessageContent(
 	value: unknown,
-	role: "user" | "assistant",
+	role: "user" | "assistant" | "developer",
 	messageIndex: number,
 ): JsonObject[] {
 	if (value === null || value === undefined) return [];
@@ -456,14 +407,14 @@ function adaptMessageContent(
 					`messages[${messageIndex}].content[${partIndex}].image_url`,
 				);
 			}
-			parts.push({
+			const imagePart: JsonObject = {
 				type: "input_image",
 				image_url: imageUrl,
-				detail:
-					stringField(image, "detail") ??
-					stringField(part, "detail") ??
-					"auto",
-			});
+			};
+			const detail =
+				stringField(image, "detail") ?? stringField(part, "detail");
+			if (detail) imagePart.detail = detail;
+			parts.push(imagePart);
 			continue;
 		}
 		if (type === "refusal" && role === "assistant") {
@@ -482,34 +433,6 @@ function adaptMessageContent(
 		);
 	}
 	return parts;
-}
-
-function instructionText(value: unknown, param: string): string {
-	if (value === null || value === undefined) return "";
-	if (typeof value === "string") return value;
-	if (!Array.isArray(value)) {
-		throw new ApiError(
-			400,
-			`${param} must be text.`,
-			"invalid_request_error",
-			"invalid_instruction_content",
-			param,
-		);
-	}
-	return value
-		.map((part, index) => {
-			if (!isRecord(part) || !["text", "input_text"].includes(String(part.type))) {
-				throw new ApiError(
-					400,
-					`${param}[${index}] must be a text content part.`,
-					"invalid_request_error",
-					"invalid_instruction_content",
-					`${param}[${index}]`,
-				);
-			}
-			return typeof part.text === "string" ? part.text : "";
-		})
-		.join("");
 }
 
 function toolOutputText(value: unknown): string {
@@ -552,21 +475,24 @@ function adaptTools(value: unknown): JsonObject[] {
 			);
 		}
 		const fn = requireRecord(tool.function, `tools[${index}].function`);
-		return {
+		const adapted: JsonObject = {
 			type: "function",
 			name: requireString(fn.name, `tools[${index}].function.name`),
-			description:
-				typeof fn.description === "string" ? fn.description : undefined,
-			parameters: isRecord(fn.parameters)
-				? fn.parameters
-				: { type: "object", properties: {} },
-			strict: fn.strict === true,
 		};
+		if (typeof fn.description === "string") {
+			adapted.description = fn.description;
+		}
+		if (fn.parameters !== undefined) {
+			adapted.parameters = fn.parameters;
+		}
+		if (fn.strict !== undefined) {
+			adapted.strict = fn.strict;
+		}
+		return adapted;
 	});
 }
 
 function adaptToolChoice(value: unknown): unknown {
-	if (value === undefined) return "auto";
 	if (value === "auto" || value === "required" || value === "none") return value;
 	if (!isRecord(value) || value.type !== "function") {
 		throw new ApiError(
@@ -603,23 +529,25 @@ function adaptResponseFormat(value: unknown): JsonObject | undefined {
 		responseFormat.json_schema,
 		"response_format.json_schema",
 	);
-	return {
-		format: {
-			type: "json_schema",
-			name: requireString(schema.name, "response_format.json_schema.name"),
-			description:
-				typeof schema.description === "string"
-					? schema.description
-					: undefined,
-			schema: isRecord(schema.schema) ? schema.schema : {},
-			strict: schema.strict === true,
-		},
+	const format: JsonObject = {
+		type: "json_schema",
+		name: requireString(schema.name, "response_format.json_schema.name"),
 	};
+	if (typeof schema.description === "string") {
+		format.description = schema.description;
+	}
+	if (schema.schema !== undefined) {
+		format.schema = schema.schema;
+	}
+	if (schema.strict !== undefined) {
+		format.strict = schema.strict;
+	}
+	return { format };
 }
 
 function createChatState(model: string): ChatState {
 	return {
-		id: `chatcmpl-${crypto.randomUUID().replace(/-/g, "")}`,
+		id: "",
 		created: Math.floor(Date.now() / 1000),
 		model,
 		text: "",
@@ -992,9 +920,20 @@ async function ensureRoleChunk(
 	state: ChatState,
 ): Promise<void> {
 	if (state.roleSent) return;
+	requireChatResponseId(state);
 	state.roleSent = true;
 	await writer.write(
 		sseData(chatChunk(state, { role: "assistant", content: "" }, null)),
+	);
+}
+
+function requireChatResponseId(state: ChatState): void {
+	if (state.id) return;
+	throw new ApiError(
+		502,
+		"The Codex response did not include a response ID.",
+		"upstream_error",
+		"missing_codex_response_id",
 	);
 }
 
