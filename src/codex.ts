@@ -341,43 +341,8 @@ async function fetchCodex(url: URL, init: RequestInit): Promise<Response> {
 				"empty_codex_response",
 			);
 		}
-		return response;
 	}
-
-	try {
-		await response.body?.cancel();
-	} catch {
-		// The upstream failure is intentionally discarded without exposing its body.
-	}
-	if (response.status === 401 || response.status === 403) {
-		if ((response.headers.get("content-type") ?? "").includes("text/html")) {
-			throw new ApiError(
-				502,
-				"The upstream edge rejected the relay request.",
-				"upstream_error",
-				"codex_edge_rejected",
-			);
-		}
-		throw new ApiError(
-			502,
-			"The upstream OAuth credentials were rejected.",
-			"upstream_authentication_error",
-			"codex_auth_rejected",
-		);
-	}
-
-	const status =
-		response.status === 429
-			? 429
-			: response.status >= 400 && response.status < 500
-				? response.status
-				: 502;
-	throw new ApiError(
-		status,
-		"The ChatGPT Codex backend rejected the request.",
-		response.status === 429 ? "rate_limit_error" : "upstream_error",
-		response.status === 429 ? "rate_limit_exceeded" : "codex_request_failed",
-	);
+	return response;
 }
 
 function resolveRelayUrl(relayUrl: string): URL {

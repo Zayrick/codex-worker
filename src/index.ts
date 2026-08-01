@@ -130,6 +130,7 @@ export default {
 					headers: request.headers,
 					signal: request.signal,
 				});
+				if (!upstream.ok) return finalize(upstream, env);
 				return finalize(
 					codexClient
 						? upstreamJson(upstream)
@@ -149,6 +150,7 @@ export default {
 						signal: request.signal,
 					},
 				);
+				if (!upstream.ok) return finalize(upstream, env);
 				return finalize(
 					new Response(upstream.body, {
 						status: 200,
@@ -168,6 +170,7 @@ export default {
 					headers: request.headers,
 					signal: request.signal,
 				});
+				if (!upstream.ok) return finalize(upstream, env);
 				return finalize(upstreamJson(upstream), env);
 			}
 
@@ -185,6 +188,7 @@ export default {
 						signal: request.signal,
 					},
 				);
+				if (!upstream.ok) return finalize(upstream, env);
 				if (adapted.stream) {
 					return finalize(
 						new Response(

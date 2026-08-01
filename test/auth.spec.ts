@@ -351,11 +351,22 @@ describe("scheduled token refresh and redaction", () => {
 		});
 	});
 
-	it("does not copy upstream credential text into API errors", async () => {
+	it("passes upstream credential errors through unchanged", async () => {
 		const raw = JSON.parse((await env.AUTH_KV.get("oauth"))!) as {
 			iv: string;
 			ciphertext: string;
 		};
+		const upstreamBody = JSON.stringify({
+			error: {
+				message: [
+					ACCESS_TOKEN,
+					"refresh-test",
+					env.OAUTH_MASTER_KEY,
+					raw.iv,
+					raw.ciphertext,
+				].join(" "),
+			},
+		});
 		fetchMock
 			.get("https://codex-relay.test")
 			.intercept({
@@ -364,32 +375,13 @@ describe("scheduled token refresh and redaction", () => {
 			})
 			.reply(
 				401,
-				JSON.stringify({
-					error: {
-						message: [
-							ACCESS_TOKEN,
-							"refresh-test",
-							env.OAUTH_MASTER_KEY,
-							raw.iv,
-							raw.ciphertext,
-						].join(" "),
-					},
-				}),
+				upstreamBody,
 				{ headers: { "Content-Type": "application/json" } },
 			);
 
 		const response = await clientFetch("/v1/models");
-		const body = await response.text();
-		expect(response.status).toBe(502);
-		for (const sensitive of [
-			ACCESS_TOKEN,
-			"refresh-test",
-			env.OAUTH_MASTER_KEY,
-			raw.iv,
-			raw.ciphertext,
-		]) {
-			expect(body).not.toContain(sensitive);
-		}
+		expect(response.status).toBe(401);
+		expect(await response.text()).toBe(upstreamBody);
 	});
 
 	it("logs only a safe code when scheduled refresh fails", async () => {

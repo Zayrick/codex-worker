@@ -1078,27 +1078,87 @@ describe("Codex upstream bridge", () => {
 		expect(stream).toContain("data: [DONE]");
 	});
 
-	it("does not refresh tokens after an upstream 401", async () => {
-		mockCodex(
-			JSON.stringify({ error: { message: "Unauthorized" } }),
-			401,
-			"application/json",
-		);
-		const response = await authenticatedFetch("https://example.com/v1/responses", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: "gpt-5.6-luna",
-				input: "test",
-			}),
-		});
-		expect(response.status).toBe(502);
-		expect(await response.json()).toMatchObject({
+	it.each([
+		{
+			name: "models",
+			upstreamPath: "/backend-api/codex/models?client_version=0.144.1",
+			upstreamMethod: "GET",
+			requestUrl: "https://example.com/v1/models",
+			requestInit: undefined,
+			status: 503,
+		},
+		{
+			name: "Responses",
+			upstreamPath: "/backend-api/codex/responses",
+			upstreamMethod: "POST",
+			requestUrl: "https://example.com/v1/responses",
+			requestInit: {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ model: "gpt-5.6-luna", input: "test" }),
+			},
+			status: 401,
+		},
+		{
+			name: "remote compaction",
+			upstreamPath: "/backend-api/codex/responses/compact",
+			upstreamMethod: "POST",
+			requestUrl: "https://example.com/v1/responses/compact",
+			requestInit: {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					model: "gpt-5.6-luna",
+					input: [],
+				}),
+			},
+			status: 422,
+		},
+		{
+			name: "Chat Completions",
+			upstreamPath: "/backend-api/codex/responses",
+			upstreamMethod: "POST",
+			requestUrl: "https://example.com/v1/chat/completions",
+			requestInit: {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					model: "gpt-5.6-luna",
+					messages: [{ role: "user", content: "test" }],
+				}),
+			},
+			status: 429,
+		},
+	])("passes through $name upstream errors unchanged", async (testCase) => {
+		const upstreamBody = JSON.stringify({
 			error: {
-				type: "upstream_authentication_error",
-				code: "codex_auth_rejected",
+				message: `${testCase.name} upstream failure`,
+				upstream_only: true,
 			},
 		});
+		fetchMock
+			.get("https://codex-relay.test")
+			.intercept({
+				path: testCase.upstreamPath,
+				method: testCase.upstreamMethod,
+			})
+			.reply(testCase.status, upstreamBody, {
+				headers: {
+					"Content-Type": "application/problem+json",
+					"X-Upstream-Error": "preserved",
+				},
+			});
+
+		const response = await authenticatedFetch(
+			testCase.requestUrl,
+			testCase.requestInit,
+		);
+		expect(response.status).toBe(testCase.status);
+		expect(response.headers.get("content-type")).toContain(
+			"application/problem+json",
+		);
+		expect(response.headers.get("x-upstream-error")).toBe("preserved");
+		expect(await response.text()).toBe(upstreamBody);
 	});
 });
 
