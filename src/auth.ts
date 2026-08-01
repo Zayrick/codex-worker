@@ -1,101 +1,187 @@
 import { ApiError } from "./errors";
+import { openJson, sealJson } from "./crypto";
 import {
 	isRecord,
+	numberField,
 	recordField,
 	stringField,
 	type JsonObject,
-	type WorkerEnv,
 } from "./types";
+
+const OAUTH_KEY = "oauth";
+const OAUTH_ENVELOPE_PURPOSE = "codex-worker/oauth/v1";
+const DEFAULT_TOKEN_LIFETIME_MS = 55 * 60 * 1000;
 
 export interface CodexCredentials {
 	token: string;
 	accountId?: string;
 }
 
-interface OAuthSession {
+export interface StoredOAuthCredentials {
+	version: 1;
 	accessToken: string;
+	refreshToken: string;
+	idToken?: string;
 	accountId?: string;
-	expiresAt?: number;
+	expiresAt: number;
+	updatedAt: string;
 }
 
-let cachedSource: string | undefined;
-let cachedSession: OAuthSession | undefined;
+type OAuthEnv = Pick<Env, "AUTH_KV" | "OAUTH_MASTER_KEY">;
 
-function parseAuthJson(raw: string): OAuthSession {
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
+export async function getCodexCredentials(
+	env: OAuthEnv,
+): Promise<CodexCredentials> {
+	const credentials = await readOAuthCredentials(env);
+	if (!credentials) {
 		throw new ApiError(
-			500,
-			"CODEX_AUTH_JSON is not valid JSON.",
+			503,
+			"Upstream OAuth credentials are not configured.",
 			"configuration_error",
-			"invalid_codex_auth",
+			"missing_oauth_credentials",
 		);
 	}
-	if (!isRecord(parsed)) {
+	if (credentials.expiresAt <= Date.now()) {
 		throw new ApiError(
-			500,
-			"CODEX_AUTH_JSON must contain an auth.json object.",
-			"configuration_error",
-			"invalid_codex_auth",
-		);
-	}
-
-	const tokens = recordField(parsed, "tokens");
-	const accessToken = stringField(tokens, "access_token");
-	if (!accessToken) {
-		throw new ApiError(
-			500,
-			"CODEX_AUTH_JSON does not contain tokens.access_token.",
-			"configuration_error",
-			"invalid_codex_auth",
-		);
-	}
-
-	const accessClaims = decodeJwt(accessToken);
-
-	return {
-		accessToken,
-		accountId: stringField(tokens, "account_id"),
-		expiresAt: jwtExpiry(accessClaims),
-	};
-}
-
-export function getCodexCredentials(env: WorkerEnv): CodexCredentials {
-	const source = env.CODEX_AUTH_JSON;
-	if (!source) {
-		throw new ApiError(
-			500,
-			"CODEX_AUTH_JSON is not configured.",
-			"configuration_error",
-			"missing_codex_auth",
-		);
-	}
-
-	if (source !== cachedSource || !cachedSession) {
-		cachedSource = source;
-		cachedSession = parseAuthJson(source);
-	}
-	if (
-		cachedSession.expiresAt !== undefined &&
-		cachedSession.expiresAt <= Date.now()
-	) {
-		throw new ApiError(
-			502,
-			"The access token in CODEX_AUTH_JSON has expired. Re-import auth.json.",
+			503,
+			"Upstream OAuth credentials are awaiting refresh.",
 			"upstream_authentication_error",
-			"codex_token_expired",
+			"oauth_refresh_required",
 		);
 	}
-
 	return {
-		token: cachedSession.accessToken,
-		accountId: cachedSession.accountId,
+		token: credentials.accessToken,
+		accountId: credentials.accountId,
 	};
 }
 
-function decodeJwt(token: string): JsonObject | undefined {
+export async function oauthRecordExists(
+	env: Pick<Env, "AUTH_KV">,
+): Promise<boolean> {
+	return (
+		(await env.AUTH_KV.get(OAUTH_KEY, {
+			type: "text",
+			cacheTtl: 30,
+		})) !== null
+	);
+}
+
+export async function requireOAuthUnconfigured(
+	env: Pick<Env, "AUTH_KV">,
+): Promise<void> {
+	if ((await env.AUTH_KV.get(OAUTH_KEY)) !== null) {
+		throw new ApiError(
+			409,
+			"OAuth credentials are already configured.",
+			"invalid_request_error",
+			"oauth_already_configured",
+		);
+	}
+}
+
+export async function readOAuthCredentials(
+	env: OAuthEnv,
+): Promise<StoredOAuthCredentials | null> {
+	const encrypted = await env.AUTH_KV.get(OAUTH_KEY, {
+		type: "text",
+		cacheTtl: 30,
+	});
+	if (encrypted === null) return null;
+
+	try {
+		const value = await openJson(
+			encrypted,
+			env.OAUTH_MASTER_KEY,
+			OAUTH_ENVELOPE_PURPOSE,
+		);
+		return validateStoredCredentials(value);
+	} catch {
+		throw invalidStoredCredentials();
+	}
+}
+
+export async function storeOAuthCredentials(
+	env: OAuthEnv,
+	credentials: StoredOAuthCredentials,
+): Promise<void> {
+	const validated = validateStoredCredentials(credentials);
+	let encrypted: string;
+	try {
+		encrypted = await sealJson(
+			validated,
+			env.OAUTH_MASTER_KEY,
+			OAUTH_ENVELOPE_PURPOSE,
+		);
+	} catch {
+		throw invalidStoredCredentials();
+	}
+	await env.AUTH_KV.put(OAUTH_KEY, encrypted);
+}
+
+export function credentialsFromTokenResponse(
+	value: unknown,
+	previous: StoredOAuthCredentials | undefined,
+	now = Date.now(),
+): StoredOAuthCredentials {
+	if (!isRecord(value)) throw invalidProviderCredentials();
+	const accessToken = stringField(value, "access_token");
+	const refreshToken =
+		stringField(value, "refresh_token") ?? previous?.refreshToken;
+	if (!accessToken || !refreshToken) throw invalidProviderCredentials();
+
+	const idToken = stringField(value, "id_token") ?? previous?.idToken;
+	const accountId =
+		stringField(value, "account_id") ??
+		accountIdFromToken(idToken) ??
+		previous?.accountId;
+	const expiresIn = numberField(value, "expires_in");
+	const expiresAt =
+		expiresIn !== undefined && expiresIn > 0
+			? now + expiresIn * 1000
+			: jwtExpiry(accessToken) ?? now + DEFAULT_TOKEN_LIFETIME_MS;
+
+	return {
+		version: 1,
+		accessToken,
+		refreshToken,
+		...(idToken ? { idToken } : {}),
+		...(accountId ? { accountId } : {}),
+		expiresAt,
+		updatedAt: new Date(now).toISOString(),
+	};
+}
+
+function validateStoredCredentials(value: unknown): StoredOAuthCredentials {
+	if (!isRecord(value)) throw invalidStoredCredentials();
+	const accessToken = stringField(value, "accessToken");
+	const refreshToken = stringField(value, "refreshToken");
+	const expiresAt = numberField(value, "expiresAt");
+	const updatedAt = stringField(value, "updatedAt");
+	if (
+		value.version !== 1 ||
+		!accessToken ||
+		!refreshToken ||
+		expiresAt === undefined ||
+		expiresAt <= 0 ||
+		!updatedAt
+	) {
+		throw invalidStoredCredentials();
+	}
+	const idToken = stringField(value, "idToken");
+	const accountId = stringField(value, "accountId");
+	return {
+		version: 1,
+		accessToken,
+		refreshToken,
+		...(idToken ? { idToken } : {}),
+		...(accountId ? { accountId } : {}),
+		expiresAt,
+		updatedAt,
+	};
+}
+
+function decodeJwt(token: string | undefined): JsonObject | undefined {
+	if (!token) return undefined;
 	const parts = token.split(".");
 	if (parts.length !== 3) return undefined;
 	try {
@@ -111,8 +197,31 @@ function decodeJwt(token: string): JsonObject | undefined {
 	}
 }
 
-function jwtExpiry(claims: JsonObject | undefined): number | undefined {
-	const exp = claims?.exp;
-	if (typeof exp !== "number" || !Number.isFinite(exp)) return undefined;
-	return exp * 1000;
+function jwtExpiry(token: string): number | undefined {
+	const exp = numberField(decodeJwt(token), "exp");
+	return exp !== undefined && exp > 0 ? exp * 1000 : undefined;
+}
+
+function accountIdFromToken(token: string | undefined): string | undefined {
+	const claims = decodeJwt(token);
+	const auth = recordField(claims, "https://api.openai.com/auth");
+	return stringField(auth, "chatgpt_account_id");
+}
+
+function invalidProviderCredentials(): ApiError {
+	return new ApiError(
+		502,
+		"The OAuth provider returned an invalid token response.",
+		"upstream_error",
+		"invalid_oauth_token_response",
+	);
+}
+
+function invalidStoredCredentials(): ApiError {
+	return new ApiError(
+		500,
+		"Stored OAuth credentials are unavailable.",
+		"configuration_error",
+		"invalid_oauth_credentials",
+	);
 }

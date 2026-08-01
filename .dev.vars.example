@@ -1,8 +1,0 @@
-# Run `node scripts/import-auth.mjs local` to import the current user's Codex auth file.
-CODEX_AUTH_JSON='{"tokens":{"access_token":"replace-me","account_id":"replace-me"}}'
-
-# Optional. When omitted, callers are not authenticated by the proxy.
-# PROXY_API_KEY="replace-with-a-long-random-value"
-
-# Optional CORS policy. Defaults to *.
-# CORS_ORIGIN="https://your-app.example"

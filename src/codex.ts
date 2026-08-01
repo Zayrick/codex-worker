@@ -2,10 +2,8 @@ import { getCodexCredentials } from "./auth";
 import { ApiError, requireString } from "./errors";
 import {
 	isRecord,
-	recordField,
 	stringField,
 	type JsonObject,
-	type WorkerEnv,
 } from "./types";
 
 const FORWARDED_CODEX_HEADERS = [
@@ -175,10 +173,10 @@ export function prepareCodexRequestBody(input: JsonObject): JsonObject {
 
 export async function requestCodex(
 	body: JsonObject,
-	env: WorkerEnv,
+	env: Env,
 	options: CodexRequestOptions = {},
 ): Promise<Response> {
-	const credentials = getCodexCredentials(env);
+	const credentials = await getCodexCredentials(env);
 	const upstreamUrl = resolveRelayUrl(env.CODEX_RELAY_URL);
 	const preparedBody = prepareCodexRequestBody(body);
 	return fetchCodex(
@@ -200,10 +198,10 @@ export async function requestCodex(
 
 export async function requestCodexCompact(
 	body: JsonObject,
-	env: WorkerEnv,
+	env: Env,
 	options: CodexRequestOptions = {},
 ): Promise<Response> {
-	const credentials = getCodexCredentials(env);
+	const credentials = await getCodexCredentials(env);
 	const upstreamUrl = resolveCompactUrl(env.CODEX_RELAY_URL);
 	const preparedBody = prepareCompactRequest(body);
 	return fetchCodex(
@@ -225,10 +223,10 @@ export async function requestCodexCompact(
 
 export async function requestCodexModels(
 	clientUrl: URL,
-	env: WorkerEnv,
+	env: Env,
 	options: CodexRequestOptions = {},
 ): Promise<Response> {
-	const credentials = getCodexCredentials(env);
+	const credentials = await getCodexCredentials(env);
 	const upstreamUrl = resolveModelsUrl(
 		env.CODEX_RELAY_URL,
 		clientUrl,
@@ -346,23 +344,23 @@ async function fetchCodex(url: URL, init: RequestInit): Promise<Response> {
 		return response;
 	}
 
-	const message = await upstreamErrorMessage(response);
+	try {
+		await response.body?.cancel();
+	} catch {
+		// The upstream failure is intentionally discarded without exposing its body.
+	}
 	if (response.status === 401 || response.status === 403) {
 		if ((response.headers.get("content-type") ?? "").includes("text/html")) {
 			throw new ApiError(
 				502,
-				message
-					? `The upstream edge rejected the relay request: ${message}`
-					: "The upstream edge rejected the relay request.",
+				"The upstream edge rejected the relay request.",
 				"upstream_error",
 				"codex_edge_rejected",
 			);
 		}
 		throw new ApiError(
 			502,
-			message
-				? `The access token in auth.json was rejected by the Codex backend: ${message}`
-				: "The access token in auth.json was rejected. Re-import the current auth.json.",
+			"The upstream OAuth credentials were rejected.",
 			"upstream_authentication_error",
 			"codex_auth_rejected",
 		);
@@ -376,7 +374,7 @@ async function fetchCodex(url: URL, init: RequestInit): Promise<Response> {
 				: 502;
 	throw new ApiError(
 		status,
-		message || `The ChatGPT Codex backend returned HTTP ${response.status}.`,
+		"The ChatGPT Codex backend rejected the request.",
 		response.status === 429 ? "rate_limit_error" : "upstream_error",
 		response.status === 429 ? "rate_limit_exceeded" : "codex_request_failed",
 	);
@@ -445,38 +443,4 @@ function resolveModelsUrl(
 		}
 	}
 	return url;
-}
-
-async function upstreamErrorMessage(response: Response): Promise<string> {
-	let text: string;
-	try {
-		text = await response.text();
-	} catch {
-		return "";
-	}
-	if (!text) return "";
-	try {
-		const value: unknown = JSON.parse(text);
-		if (!isRecord(value)) return "";
-		const error = recordField(value, "error");
-		return (
-			stringField(error, "message") ??
-			stringField(value, "message") ??
-			stringField(value, "detail") ??
-			""
-		);
-	} catch {
-		const plain = text
-			.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-			.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-			.replace(/<[^>]+>/g, " ")
-			.replace(/&nbsp;/gi, " ")
-			.replace(/&amp;/gi, "&")
-			.replace(/&lt;/gi, "<")
-			.replace(/&gt;/gi, ">")
-			.replace(/&quot;/gi, '"')
-			.replace(/\s+/g, " ")
-			.trim();
-		return plain.length <= 500 ? plain : `${plain.slice(0, 500)}…`;
-	}
 }

@@ -242,16 +242,12 @@ export function createChatCompletionStream(
 				await writer.write(SSE_DONE);
 				state.finished = true;
 			}
-		} catch (error) {
+		} catch {
 			if (!state.finished) {
-				const message =
-					error instanceof Error
-						? error.message
-						: "The Codex response stream failed.";
 				await writer.write(
 					sseData({
 						error: {
-							message,
+							message: "The Codex response stream failed.",
 							type: "upstream_error",
 							param: null,
 							code: "codex_stream_failed",
@@ -308,7 +304,7 @@ function messageToResponseItems(
 	if (role !== "user" && role !== "assistant" && role !== "developer") {
 		throw new ApiError(
 			400,
-			`Unsupported message role '${role}'.`,
+			"Unsupported message role.",
 			"invalid_request_error",
 			"invalid_message_role",
 			`messages[${index}].role`,
@@ -379,7 +375,7 @@ function messageToResponseItems(
 			} else {
 				throw new ApiError(
 					400,
-					`Unsupported tool call type '${callType}'.`,
+					"Unsupported tool call type.",
 					"invalid_request_error",
 					"unsupported_tool_call_type",
 					`messages[${index}].tool_calls[${toolIndex}].type`,
@@ -548,7 +544,7 @@ function adaptMessageContent(
 		}
 		throw new ApiError(
 			400,
-			`Unsupported message content type '${type ?? "(missing)"}'.`,
+			"Unsupported message content type.",
 			"invalid_request_error",
 			"unsupported_content_type",
 			`messages[${messageIndex}].content[${partIndex}].type`,
@@ -853,13 +849,11 @@ function absorbEvent(state: ChatState, event: JsonObject): void {
 		updateResponseMetadata(state, state.response);
 	}
 	if (type === "error" || type === "response.failed") {
-		const error =
-			recordField(event, "error") ?? recordField(state.response, "error");
 		throw new ApiError(
 			502,
-			stringField(error, "message") ?? "The Codex response stream failed.",
+			"The Codex response stream failed.",
 			"upstream_error",
-			stringField(error, "code") ?? "codex_stream_failed",
+			"codex_stream_failed",
 		);
 	}
 }
@@ -1219,10 +1213,7 @@ async function writeStreamEvent(
 	}
 
 	if (type === "error") {
-		const error = recordField(event, "error");
-		throw new Error(
-			stringField(error, "message") ?? "The Codex response stream failed.",
-		);
+		throw new Error("The Codex response stream failed.");
 	}
 }
 

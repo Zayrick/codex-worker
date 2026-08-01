@@ -1,12 +1,5 @@
 export type JsonObject = Record<string, unknown>;
 
-export interface WorkerEnv {
-	CODEX_AUTH_JSON: string;
-	CODEX_RELAY_URL: string;
-	PROXY_API_KEY?: string;
-	CORS_ORIGIN?: string;
-}
-
 export function isRecord(value: unknown): value is JsonObject {
 	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

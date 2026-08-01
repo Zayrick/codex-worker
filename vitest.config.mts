@@ -1,16 +1,6 @@
 import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
 
-const testAccessToken = [
-	"e30",
-	Buffer.from(JSON.stringify({ exp: 4_102_444_800 })).toString("base64url"),
-	"test-signature",
-].join(".");
-const testAuthJson = JSON.stringify({
-	tokens: {
-		access_token: testAccessToken,
-		account_id: "account-test",
-	},
-});
+const testMasterKey = Buffer.alloc(32, 7).toString("base64url");
 
 export default defineWorkersConfig({
 	test: {
@@ -20,7 +10,7 @@ export default defineWorkersConfig({
 				wrangler: { configPath: "./wrangler.jsonc" },
 				miniflare: {
 					bindings: {
-						CODEX_AUTH_JSON: testAuthJson,
+						OAUTH_MASTER_KEY: testMasterKey,
 						CODEX_RELAY_URL:
 							"https://codex-relay.test/backend-api/codex/responses",
 					},

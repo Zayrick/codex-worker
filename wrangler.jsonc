@@ -15,7 +15,19 @@
 		"nodejs_compat"
 	],
 	"vars": {
-		"CODEX_RELAY_URL": "https://codex-relay.oxio.uno/backend-api/codex/responses"
+		"CODEX_RELAY_URL": "https://codex-relay.oxio.uno/backend-api/codex/responses",
+		"CORS_ORIGIN": "*"
+	},
+	"secrets": {
+		"required": ["OAUTH_MASTER_KEY"]
+	},
+	"kv_namespaces": [
+		{
+			"binding": "AUTH_KV"
+		}
+	],
+	"triggers": {
+		"crons": ["*/10 * * * *"]
 	}
 		/**
 	 * Smart Placement

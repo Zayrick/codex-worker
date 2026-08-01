@@ -7,6 +7,7 @@ import {
 	waitOnExecutionContext,
 } from "cloudflare:test";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { storeOAuthCredentials } from "../src/auth";
 import {
 	chatCompletionFromEvents,
 	chatRequestToResponses,
@@ -16,10 +17,23 @@ import {
 	prepareResponsesRequest,
 } from "../src/codex";
 import worker from "../src/index";
-import type { WorkerEnv } from "../src/types";
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 const CREATED_AT = 1_754_006_400;
+const TEST_API_KEY = "sk-test-api-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const TEST_ACCESS_TOKEN = [
+	"e30",
+	Buffer.from(JSON.stringify({ exp: 4_102_444_800 })).toString("base64url"),
+	"test-signature",
+].join(".");
+const TEST_OAUTH = {
+	version: 1 as const,
+	accessToken: TEST_ACCESS_TOKEN,
+	refreshToken: "test-refresh-token",
+	accountId: "account-test",
+	expiresAt: 4_102_444_800_000,
+	updatedAt: "2026-07-31T00:00:00.000Z",
+};
 const CODEX_MODELS = {
 	models: [
 		{
@@ -60,9 +74,11 @@ const COMPLETED_RESPONSE = {
 	},
 };
 
-beforeAll(() => {
+beforeAll(async () => {
 	fetchMock.activate();
 	fetchMock.disableNetConnect();
+	await env.AUTH_KV.put("API-test-client", TEST_API_KEY);
+	await storeOAuthCredentials(env, TEST_OAUTH);
 });
 
 afterEach(() => {
@@ -81,8 +97,8 @@ describe("routing and model compatibility", () => {
 		expect(response.headers.has("access-control-expose-headers")).toBe(false);
 		expect(await response.json()).toEqual({
 			status: "ok",
-			codex_auth_configured: true,
-			token_refresh: false,
+			oauth_configured: true,
+			token_refresh: true,
 		});
 	});
 
@@ -109,7 +125,7 @@ describe("routing and model compatibility", () => {
 				};
 			});
 
-		const response = await SELF.fetch(
+		const response = await authenticatedFetch(
 			"https://example.com/v1/models?client_version=0.200.0&channel=stable&session_id=drop-me&api_key=drop-me",
 			{
 				headers: {
@@ -132,16 +148,11 @@ describe("routing and model compatibility", () => {
 		expect(response.headers.has("x-request-id")).toBe(false);
 		expect(response.headers.has("set-cookie")).toBe(false);
 
-		const configuredAuth = JSON.parse(
-			(env as WorkerEnv).CODEX_AUTH_JSON,
-		) as {
-			tokens: { access_token: string; account_id: string };
-		};
 		expect(outboundHeaders?.get("authorization")).toBe(
-			`Bearer ${configuredAuth.tokens.access_token}`,
+			`Bearer ${TEST_OAUTH.accessToken}`,
 		);
 		expect(outboundHeaders?.get("chatgpt-account-id")).toBe(
-			configuredAuth.tokens.account_id,
+			TEST_OAUTH.accountId,
 		);
 		expect(outboundHeaders?.get("accept")).toBe("application/json");
 		expect(outboundHeaders?.get("version")).toBe("0.144.1");
@@ -163,7 +174,7 @@ describe("routing and model compatibility", () => {
 	});
 
 	it("does not emulate the removed single-model catalog route", async () => {
-		const response = await SELF.fetch(
+		const response = await authenticatedFetch(
 			"https://example.com/v1/models/gpt-5.6-lunar",
 		);
 		expect(response.status).toBe(404);
@@ -180,7 +191,7 @@ describe("routing and model compatibility", () => {
 				headers: { "Content-Type": "application/json" },
 			});
 
-		const response = await SELF.fetch("https://example.com/v1/models");
+		const response = await authenticatedFetch("https://example.com/v1/models");
 		expect(response.status).toBe(200);
 		expect(await response.json()).toEqual({
 			object: "list",
@@ -188,14 +199,10 @@ describe("routing and model compatibility", () => {
 		});
 	});
 
-	it("enforces an optional downstream proxy API key", async () => {
+	it("requires a downstream KV API key", async () => {
 		const request = new IncomingRequest("https://example.com/v1/models");
 		const ctx = createExecutionContext();
-		const response = await worker.fetch(
-			request,
-			{ ...(env as WorkerEnv), PROXY_API_KEY: "proxy-secret" },
-			ctx,
-		);
+		const response = await worker.fetch(request, env, ctx);
 		await waitOnExecutionContext(ctx);
 		expect(response.status).toBe(401);
 		expect(await response.json()).toMatchObject({
@@ -726,7 +733,7 @@ describe("Codex upstream bridge", () => {
 				};
 			});
 
-		const response = await SELF.fetch(
+		const response = await authenticatedFetch(
 			"https://example.com/v1/responses",
 			{
 				method: "POST",
@@ -768,17 +775,12 @@ describe("Codex upstream bridge", () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.has("x-request-id")).toBe(false);
 
-		const configuredAuth = JSON.parse(
-			(env as WorkerEnv).CODEX_AUTH_JSON,
-		) as {
-			tokens: { access_token: string; account_id: string };
-		};
 		expect(outbound).toBeDefined();
 		expect(outbound!.headers.get("authorization")).toBe(
-			`Bearer ${configuredAuth.tokens.access_token}`,
+			`Bearer ${TEST_OAUTH.accessToken}`,
 		);
 		expect(outbound!.headers.get("chatgpt-account-id")).toBe(
-			configuredAuth.tokens.account_id,
+			TEST_OAUTH.accountId,
 		);
 		expect(outbound!.headers.get("accept")).toBe("text/event-stream");
 		expect(outbound!.headers.get("content-type")).toBe("application/json");
@@ -869,7 +871,7 @@ describe("Codex upstream bridge", () => {
 				};
 			});
 
-		const response = await SELF.fetch(
+		const response = await authenticatedFetch(
 			"https://example.com/v1/responses/compact",
 			{
 				method: "POST",
@@ -933,7 +935,7 @@ describe("Codex upstream bridge", () => {
 	it("forwards Responses SSE without collecting when stream is omitted", async () => {
 		const upstreamSse = sseResponse();
 		mockCodex(upstreamSse);
-		const response = await SELF.fetch("https://example.com/v1/responses", {
+		const response = await authenticatedFetch("https://example.com/v1/responses", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -959,7 +961,7 @@ describe("Codex upstream bridge", () => {
 				}),
 			),
 		);
-		const response = await SELF.fetch("https://example.com/v1/responses", {
+		const response = await authenticatedFetch("https://example.com/v1/responses", {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
@@ -974,7 +976,7 @@ describe("Codex upstream bridge", () => {
 
 	it("returns a non-streaming Chat Completions response", async () => {
 		mockCodex(sseResponse());
-		const response = await SELF.fetch(
+		const response = await authenticatedFetch(
 			"https://example.com/v1/chat/completions",
 			{
 				method: "POST",
@@ -1021,7 +1023,7 @@ describe("Codex upstream bridge", () => {
 
 	it("converts Codex SSE into Chat Completions chunks and usage", async () => {
 		mockCodex(sseResponse());
-		const response = await SELF.fetch(
+		const response = await authenticatedFetch(
 			"https://example.com/v1/chat/completions",
 			{
 				method: "POST",
@@ -1047,7 +1049,7 @@ describe("Codex upstream bridge", () => {
 
 	it("streams custom tool input through Chat-compatible tool call deltas", async () => {
 		mockCodex(customToolSseResponse());
-		const response = await SELF.fetch(
+		const response = await authenticatedFetch(
 			"https://example.com/v1/chat/completions",
 			{
 				method: "POST",
@@ -1082,7 +1084,7 @@ describe("Codex upstream bridge", () => {
 			401,
 			"application/json",
 		);
-		const response = await SELF.fetch("https://example.com/v1/responses", {
+		const response = await authenticatedFetch("https://example.com/v1/responses", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -1099,6 +1101,15 @@ describe("Codex upstream bridge", () => {
 		});
 	});
 });
+
+function authenticatedFetch(
+	input: string,
+	init: RequestInit = {},
+): Promise<Response> {
+	const headers = new Headers(init.headers);
+	headers.set("Authorization", `Bearer ${TEST_API_KEY}`);
+	return SELF.fetch(input, { ...init, headers });
+}
 
 function mockCodex(
 	body: string,
