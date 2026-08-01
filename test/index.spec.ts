@@ -6,7 +6,7 @@ import {
 	SELF,
 	waitOnExecutionContext,
 } from "cloudflare:test";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { storeOAuthCredentials } from "../src/auth";
 import {
 	chatCompletionFromEvents,
@@ -83,6 +83,7 @@ beforeAll(async () => {
 
 afterEach(() => {
 	fetchMock.assertNoPendingInterceptors();
+	vi.restoreAllMocks();
 });
 
 afterAll(() => {
@@ -90,16 +91,47 @@ afterAll(() => {
 });
 
 describe("routing and model compatibility", () => {
-	it("reports health without exposing credentials", async () => {
+	it("returns an empty 204 when the stored OAuth credentials are usable", async () => {
 		const response = await SELF.fetch("https://example.com/healthz");
-		expect(response.status).toBe(200);
-		expect(response.headers.has("x-request-id")).toBe(false);
-		expect(response.headers.has("access-control-expose-headers")).toBe(false);
-		expect(await response.json()).toEqual({
-			status: "ok",
-			oauth_configured: true,
-			token_refresh: true,
+		await expectEmptyResponse(response, 204);
+	});
+
+	it("returns an empty 404 and logs only a safe code when unhealthy", async () => {
+		const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		const unhealthyEnv: Env = {
+			...env,
+			AUTH_KV: {
+				get: vi.fn().mockResolvedValue(null),
+			} as unknown as KVNamespace,
+		};
+		const request = new IncomingRequest("https://example.com/healthz");
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, unhealthyEnv, ctx);
+		await waitOnExecutionContext(ctx);
+
+		await expectEmptyResponse(response, 404);
+		expect(errorLog).toHaveBeenCalledWith(
+			JSON.stringify({
+				event: "health_check",
+				status: "failed",
+				code: "missing_oauth_credentials",
+			}),
+		);
+	});
+
+	it.each([
+		["root path", "GET", "/"],
+		["unknown path", "GET", "/robots.txt"],
+		["preflight", "OPTIONS", "/v1/models"],
+		["wrong API method", "POST", "/v1/models"],
+		["extra API path", "GET", "/v1/models/gpt-5.6-luna"],
+		["wrong device method", "POST", "/auth/device/start"],
+	])("returns an empty 404 for the %s", async (_name, method, pathname) => {
+		const response = await SELF.fetch(`https://example.com${pathname}`, {
+			method,
+			headers: { Authorization: `Bearer ${TEST_API_KEY}` },
 		});
+		await expectEmptyResponse(response, 404);
 	});
 
 	it("forwards the upstream Codex model catalog without a local model list", async () => {
@@ -177,7 +209,7 @@ describe("routing and model compatibility", () => {
 		const response = await authenticatedFetch(
 			"https://example.com/v1/models/gpt-5.6-lunar",
 		);
-		expect(response.status).toBe(404);
+		await expectEmptyResponse(response, 404);
 	});
 
 	it("adds the required Codex client_version when the client omits it", async () => {
@@ -199,15 +231,27 @@ describe("routing and model compatibility", () => {
 		});
 	});
 
-	it("requires a downstream KV API key", async () => {
-		const request = new IncomingRequest("https://example.com/v1/models");
-		const ctx = createExecutionContext();
-		const response = await worker.fetch(request, env, ctx);
-		await waitOnExecutionContext(ctx);
-		expect(response.status).toBe(401);
-		expect(await response.json()).toMatchObject({
-			error: { code: "invalid_api_key" },
-		});
+	it.each([
+		["models", "GET", "/v1/models"],
+		["Responses", "POST", "/v1/responses"],
+		["compaction", "POST", "/v1/responses/compact"],
+		["Chat Completions", "POST", "/v1/chat/completions"],
+	])("hides $0 when the API key is absent or incorrect", async (_name, method, path) => {
+		for (const apiKey of [
+			undefined,
+			"sk-test-wrong-ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+		]) {
+			const headers = new Headers();
+			if (apiKey) headers.set("Authorization", `Bearer ${apiKey}`);
+			const request = new IncomingRequest(`https://example.com${path}`, {
+				method,
+				headers,
+			});
+			const ctx = createExecutionContext();
+			const response = await worker.fetch(request, env, ctx);
+			await waitOnExecutionContext(ctx);
+			await expectEmptyResponse(response, 404);
+		}
 	});
 });
 
@@ -1085,7 +1129,7 @@ describe("Codex upstream bridge", () => {
 			upstreamMethod: "GET",
 			requestUrl: "https://example.com/v1/models",
 			requestInit: undefined,
-			status: 503,
+			status: 404,
 		},
 		{
 			name: "Responses",
@@ -1169,6 +1213,16 @@ function authenticatedFetch(
 	const headers = new Headers(init.headers);
 	headers.set("Authorization", `Bearer ${TEST_API_KEY}`);
 	return SELF.fetch(input, { ...init, headers });
+}
+
+async function expectEmptyResponse(
+	response: Response,
+	status: 204 | 404,
+): Promise<void> {
+	expect(response.status).toBe(status);
+	expect(response.headers.has("content-type")).toBe(false);
+	expect(response.headers.has("access-control-allow-origin")).toBe(false);
+	expect(await response.text()).toBe("");
 }
 
 function mockCodex(

@@ -33,15 +33,18 @@ base64url 编码。浏览器设备登录页通过查询参数 `secret` 校验这
 
 ## API
 
-公开接口：
+健康检查不需要凭据：
 
-- `GET /`
-- `GET /healthz`
+- `GET /healthz`：仅在已保存的 OAuth 凭据可解密且尚未过期时返回空正文
+  `204`；不健康或检查失败时只在 Worker 日志记录安全错误码，对外返回空正文
+  `404`。
 
 浏览器设备登录不接受、也不需要 `API-*` 值：
 
 - `GET /auth/device/start?secret=<OAUTH_MASTER_KEY>`：返回设备登录 HTML 页面；
 - `GET /auth/device/poll?secret=...&state=...`：页面内部的状态检查地址。
+
+这两个地址缺少 `secret` 或 `secret` 错误时均返回空正文 `404`。
 
 用户只需访问 `start`。Worker 返回的页面只显示设备码和 OpenAI 验证链接，并通过
 隐藏的状态 iframe 按服务端给出的间隔自动访问 `poll`；无需手动构造 `state` 或
@@ -56,6 +59,12 @@ base64url 编码。浏览器设备登录页通过查询参数 `secret` 校验这
 
 客户端可使用 `Authorization: Bearer sk-...` 或 `X-Api-Key: sk-...`。Responses
 直接返回 Codex SSE；Chat Completions 根据 `stream` 返回 JSON 或 SSE。
+缺少或提交错误 API key 时返回空正文 `404`。API key 通过后，上游的错误状态、
+正文与响应头保持透传。
+
+除此之外的全部路径与方法（包括 `/`、未列出的 `/v1/*`、错误方法和
+`OPTIONS`）均返回空正文 `404`。Worker 自己生成的 `404` 与健康检查 `204` 不附带
+HTML、JSON 或说明文本。
 
 设备登录只在 KV 中不存在 `oauth` 时开放，防止请求覆盖已经配置的 OAuth。
 
@@ -117,7 +126,8 @@ API key 和 OAuth 的常规读取使用 `cacheTtl: 30`。Workers KV 是最终一
 
 - Worker 没有模块级 OAuth 或 API key 缓存；
 - 日志只记录刷新状态、固定错误 code 和计划时间；
-- 错误响应不包含上游响应正文、OAuth token、API key、主密钥、IV 或密文；
+- Worker 自己生成的错误响应不包含 OAuth token、API key、主密钥、IV 或密文；
+- 已通过 API key 鉴权的请求会按设计原样收到上游错误响应；
 - `.dev.vars*` 和 `.env*` 被 Git 忽略；
 - 测试通过隔离的 Workers 测试环境注入虚拟凭据，不读取真实用户凭据。
 

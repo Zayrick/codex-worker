@@ -158,29 +158,30 @@ describe("API-* value authentication", () => {
 			undefined,
 			"sk-test-wrong-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
 		);
-		expect(wrong.status).toBe(401);
+		await expectEmptyResponse(wrong, 404);
 		const missing = await clientFetch(
 			"/v1/models",
 			undefined,
 			"sk-test-missing-EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
 		);
-		expect(missing.status).toBe(401);
+		await expectEmptyResponse(missing, 404);
 	});
 });
 
 describe("Codex device authorization", () => {
-	it("serves a browser error page when the secret query parameter is invalid", async () => {
+	it("hides the device route when the secret query parameter is invalid", async () => {
 		const apiKeyOnly = await deviceStart(undefined, {
 			headers: { Authorization: `Bearer ${CLIENT_API_KEY}` },
 		});
-		expect(apiKeyOnly.status).toBe(401);
-		expect(apiKeyOnly.headers.get("Content-Type")).toContain("text/html");
-		expect(await apiKeyOnly.text()).toContain("invalid_oauth_device_secret");
+		await expectEmptyResponse(apiKeyOnly, 404);
 
 		const wrongSecret = await deviceStart("wrong-oauth-master-key");
-		expect(wrongSecret.status).toBe(401);
-		expect(wrongSecret.headers.get("Content-Type")).toContain("text/html");
-		expect(await wrongSecret.text()).toContain("invalid_oauth_device_secret");
+		await expectEmptyResponse(wrongSecret, 404);
+
+		const missingPollSecret = await SELF.fetch(
+			"https://example.com/auth/device/poll?state=opaque",
+		);
+		await expectEmptyResponse(missingPollSecret, 404);
 	});
 
 	it("refuses to replace OAuth credentials already stored in KV", async () => {
@@ -230,9 +231,7 @@ describe("Codex device authorization", () => {
 			const rejectedUrl = new URL(pollUrl);
 			rejectedUrl.searchParams.set("secret", "wrong-oauth-master-key");
 			const rejected = await SELF.fetch(rejectedUrl.toString());
-			expect(rejected.status).toBe(401);
-			expect(rejected.headers.get("Content-Type")).toContain("text/html");
-			expect(await rejected.text()).toContain("invalid_oauth_device_secret");
+			await expectEmptyResponse(rejected, 404);
 
 			fetchMock
 				.get("https://auth.openai.com")
@@ -500,6 +499,16 @@ function clientFetch(
 	const headers = new Headers(init?.headers);
 	headers.set("Authorization", `Bearer ${apiKey}`);
 	return SELF.fetch(`https://example.com${path}`, { ...init, headers });
+}
+
+async function expectEmptyResponse(
+	response: Response,
+	status: 204 | 404,
+): Promise<void> {
+	expect(response.status).toBe(status);
+	expect(response.headers.has("content-type")).toBe(false);
+	expect(response.headers.has("access-control-allow-origin")).toBe(false);
+	expect(await response.text()).toBe("");
 }
 
 function jwt(payload: Record<string, unknown>): string {

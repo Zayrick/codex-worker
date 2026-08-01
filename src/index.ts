@@ -1,5 +1,5 @@
 import { zstdDecompressSync } from "node:zlib";
-import { oauthRecordExists } from "./auth";
+import { getCodexCredentials } from "./auth";
 import {
 	chatCompletionFromEvents,
 	chatRequestToResponses,
@@ -34,203 +34,118 @@ import {
 	type JsonObject,
 } from "./types";
 
+type ApiRoute = "models" | "responses" | "compact" | "chat_completions";
+type DeviceRoute = "start" | "poll";
+
 export default {
 	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
+		if (request.method === "GET" && url.pathname === "/healthz") {
+			return healthResponse(env);
+		}
+
+		const deviceRoute = matchDeviceRoute(request.method, url.pathname);
+		if (deviceRoute) {
+			return handleDeviceRoute(deviceRoute, request, url, env);
+		}
+
+		const apiRoute = matchApiRoute(request.method, url.pathname);
+		if (!apiRoute) return emptyResponse(404);
+		if (!(await apiClientAuthenticated(request, env))) {
+			return emptyResponse(404);
+		}
+
 		try {
-			if (request.method === "OPTIONS") {
-				return finalize(new Response(null, { status: 204 }), env);
-			}
-
-			if (request.method === "GET" && url.pathname === "/") {
-				return finalize(
-					json({
-						name: "codex-worker",
-						status: "ok",
-						compatibility:
-							"Codex Responses passthrough with an OpenAI Chat Completions adapter",
-						endpoints: [
-							"GET /v1/models",
-							"POST /v1/responses",
-							"POST /v1/responses/compact",
-							"POST /v1/chat/completions",
-							"GET /auth/device/start?secret=...",
-							"GET /auth/device/poll?secret=...&state=...",
-						],
-						client_authentication: "required for /v1/*",
-						device_authentication:
-							"secret query parameter must equal OAUTH_MASTER_KEY",
-						token_refresh: "scheduled",
-					}),
-					env,
-				);
-			}
-
-			if (request.method === "GET" && url.pathname === "/healthz") {
-				const configured = await oauthRecordExists(env);
-				return finalize(
-					json({
-						status: "ok",
-						oauth_configured: configured,
-						token_refresh: true,
-					}),
-					env,
-				);
-			}
-
-			if (
-				request.method === "GET" &&
-				url.pathname === "/auth/device/start"
-			) {
-				const secret = await requireDeviceSecret(
-					url.searchParams.get("secret"),
-					env.OAUTH_MASTER_KEY,
-				);
-				const authorization = await startDeviceAuthorization(
-					env,
-					request.signal,
-				);
-				const pollUrl = new URL("/auth/device/poll", url);
-				pollUrl.searchParams.set("secret", secret);
-				pollUrl.searchParams.set("state", authorization.state);
-				return finalize(deviceStartPage(authorization, pollUrl), env);
-			}
-
-			if (
-				request.method === "GET" &&
-				url.pathname === "/auth/device/poll"
-			) {
-				await requireDeviceSecret(
-					url.searchParams.get("secret"),
-					env.OAUTH_MASTER_KEY,
-				);
-				const state = requireString(
-					url.searchParams.get("state"),
-					"state",
-					"Missing device authorization state.",
-				);
-				const result = await pollDeviceAuthorization(
-					env,
-					state,
-					request.signal,
-				);
-				return finalize(
-					result.status === "pending"
-						? devicePendingPage(url, result.retryAfter)
-						: deviceCompletePage(),
-					env,
-				);
-			}
-
-			await authenticateClient(request, env);
-
-			if (request.method === "GET" && url.pathname === "/v1/models") {
-				const codexClient = url.searchParams.has("client_version");
-				const upstream = await requestCodexModels(url, env, {
-					headers: request.headers,
-					signal: request.signal,
-				});
-				if (!upstream.ok) return finalize(upstream, env);
-				return finalize(
-					codexClient
-						? upstreamJson(upstream)
-						: json(await openAiModelList(upstream)),
-					env,
-				);
-			}
-
-			if (request.method === "POST" && url.pathname === "/v1/responses") {
-				const input = await parseJsonBody(request);
-				const body = prepareResponsesRequest(input);
-				const upstream = await requestCodex(
-					body,
-					env,
-					{
+			switch (apiRoute) {
+				case "models": {
+					const codexClient = url.searchParams.has("client_version");
+					const upstream = await requestCodexModels(url, env, {
 						headers: request.headers,
 						signal: request.signal,
-					},
-				);
-				if (!upstream.ok) return finalize(upstream, env);
-				return finalize(
-					new Response(upstream.body, {
-						status: 200,
-						headers: sseHeaders(upstream.headers),
-					}),
-					env,
-				);
-			}
-
-			if (
-				request.method === "POST" &&
-				url.pathname === "/v1/responses/compact"
-			) {
-				const input = await parseJsonBody(request);
-				const body = prepareCompactRequest(input);
-				const upstream = await requestCodexCompact(body, env, {
-					headers: request.headers,
-					signal: request.signal,
-				});
-				if (!upstream.ok) return finalize(upstream, env);
-				return finalize(upstreamJson(upstream), env);
-			}
-
-			if (
-				request.method === "POST" &&
-				url.pathname === "/v1/chat/completions"
-			) {
-				const input = await parseJsonBody(request);
-				const adapted = chatRequestToResponses(input);
-				const upstream = await requestCodex(
-					adapted.body,
-					env,
-					{
-						headers: request.headers,
-						signal: request.signal,
-					},
-				);
-				if (!upstream.ok) return finalize(upstream, env);
-				if (adapted.stream) {
+					});
+					if (!upstream.ok) return finalize(upstream, env);
 					return finalize(
-						new Response(
-							createChatCompletionStream(
-								upstream.body!,
-								{
-									model: adapted.model,
-									includeUsage: adapted.includeUsage,
-								},
-								ctx,
-							),
-							{
-								status: 200,
-								headers: sseHeaders(upstream.headers),
-							},
-						),
+						codexClient
+							? upstreamJson(upstream)
+							: json(await openAiModelList(upstream)),
 						env,
 					);
 				}
 
-				const events = await collectSseEvents(upstream.body!);
-				return finalize(
-					json(chatCompletionFromEvents(events, adapted.model)),
-					env,
-				);
-			}
+				case "responses": {
+					const input = await parseJsonBody(request);
+					const body = prepareResponsesRequest(input);
+					const upstream = await requestCodex(
+						body,
+						env,
+						{
+							headers: request.headers,
+							signal: request.signal,
+						},
+					);
+					if (!upstream.ok) return finalize(upstream, env);
+					return finalize(
+						new Response(upstream.body, {
+							status: 200,
+							headers: sseHeaders(upstream.headers),
+						}),
+						env,
+					);
+				}
 
-			throw new ApiError(
-				404,
-				"No route matches this request.",
-				"invalid_request_error",
-				"not_found",
-			);
+				case "compact": {
+					const input = await parseJsonBody(request);
+					const body = prepareCompactRequest(input);
+					const upstream = await requestCodexCompact(body, env, {
+						headers: request.headers,
+						signal: request.signal,
+					});
+					if (!upstream.ok) return finalize(upstream, env);
+					return finalize(upstreamJson(upstream), env);
+				}
+
+				case "chat_completions": {
+					const input = await parseJsonBody(request);
+					const adapted = chatRequestToResponses(input);
+					const upstream = await requestCodex(
+						adapted.body,
+						env,
+						{
+							headers: request.headers,
+							signal: request.signal,
+						},
+					);
+					if (!upstream.ok) return finalize(upstream, env);
+					if (adapted.stream) {
+						return finalize(
+							new Response(
+								createChatCompletionStream(
+									upstream.body!,
+									{
+										model: adapted.model,
+										includeUsage: adapted.includeUsage,
+									},
+									ctx,
+								),
+								{
+									status: 200,
+									headers: sseHeaders(upstream.headers),
+								},
+							),
+							env,
+						);
+					}
+
+					const events = await collectSseEvents(upstream.body!);
+					return finalize(
+						json(chatCompletionFromEvents(events, adapted.model)),
+						env,
+					);
+				}
+			}
 		} catch (error) {
 			const apiError = normalizeError(error);
-			if (
-				request.method === "GET" &&
-				(url.pathname === "/auth/device/start" ||
-					url.pathname === "/auth/device/poll")
-			) {
-				return finalize(deviceErrorPage(apiError), env);
-			}
+			if (apiError.status === 404) return emptyResponse(404);
 			return finalize(
 				json(errorPayload(apiError), apiError.status),
 				env,
@@ -258,6 +173,114 @@ export default {
 		}
 	},
 } satisfies ExportedHandler<Env>;
+
+function matchApiRoute(method: string, pathname: string): ApiRoute | undefined {
+	if (method === "GET" && pathname === "/v1/models") return "models";
+	if (method !== "POST") return undefined;
+	switch (pathname) {
+		case "/v1/responses":
+			return "responses";
+		case "/v1/responses/compact":
+			return "compact";
+		case "/v1/chat/completions":
+			return "chat_completions";
+		default:
+			return undefined;
+	}
+}
+
+function matchDeviceRoute(
+	method: string,
+	pathname: string,
+): DeviceRoute | undefined {
+	if (method !== "GET") return undefined;
+	if (pathname === "/auth/device/start") return "start";
+	if (pathname === "/auth/device/poll") return "poll";
+	return undefined;
+}
+
+async function handleDeviceRoute(
+	route: DeviceRoute,
+	request: Request,
+	url: URL,
+	env: Env,
+): Promise<Response> {
+	let secret: string;
+	try {
+		secret = await requireDeviceSecret(
+			url.searchParams.get("secret"),
+			env.OAUTH_MASTER_KEY,
+		);
+	} catch (error) {
+		if (!hasErrorCode(error, "invalid_oauth_device_secret")) {
+			logInternalFailure("device_auth", error);
+		}
+		return emptyResponse(404);
+	}
+
+	try {
+		if (route === "start") {
+			const authorization = await startDeviceAuthorization(
+				env,
+				request.signal,
+			);
+			const pollUrl = new URL("/auth/device/poll", url);
+			pollUrl.searchParams.set("secret", secret);
+			pollUrl.searchParams.set("state", authorization.state);
+			return finalize(deviceStartPage(authorization, pollUrl), env);
+		}
+
+		const state = requireString(
+			url.searchParams.get("state"),
+			"state",
+			"Missing device authorization state.",
+		);
+		const result = await pollDeviceAuthorization(
+			env,
+			state,
+			request.signal,
+		);
+		return finalize(
+			result.status === "pending"
+				? devicePendingPage(url, result.retryAfter)
+				: deviceCompletePage(),
+			env,
+		);
+	} catch (error) {
+		const apiError = normalizeError(error);
+		if (apiError.status === 404) return emptyResponse(404);
+		return finalize(deviceErrorPage(apiError), env);
+	}
+}
+
+async function apiClientAuthenticated(
+	request: Request,
+	env: Env,
+): Promise<boolean> {
+	try {
+		await authenticateClient(request, env);
+		return true;
+	} catch (error) {
+		if (!hasErrorCode(error, "invalid_api_key")) {
+			logInternalFailure("client_auth", error);
+		}
+		return false;
+	}
+}
+
+async function healthResponse(env: Env): Promise<Response> {
+	try {
+		await getCodexCredentials(env);
+		return emptyResponse(204);
+	} catch (error) {
+		logInternalFailure("health_check", error);
+		return emptyResponse(404);
+	}
+}
+
+function emptyResponse(status: 204 | 404): Response {
+	return new Response(null, { status });
+}
 
 async function parseJsonBody(request: Request): Promise<Record<string, unknown>> {
 	let value: unknown;
@@ -494,17 +517,14 @@ function copyCodexResponseHeaders(source: Headers, target: Headers): void {
 	if (turnState) target.set("X-Codex-Turn-State", turnState);
 }
 
-function finalize(
-	response: Response,
-	env: Env,
-): Response {
+function finalize(response: Response, env: Env): Response {
 	const headers = new Headers(response.headers);
 	headers.set("Access-Control-Allow-Origin", env.CORS_ORIGIN || "*");
 	headers.set(
 		"Access-Control-Allow-Headers",
 		"Authorization, Content-Type, X-Api-Key, Version, X-Codex-Beta-Features, X-Codex-Turn-Metadata, X-Codex-Turn-State",
 	);
-	headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+	headers.set("Access-Control-Allow-Methods", "GET, POST");
 	return new Response(response.body, {
 		status: response.status,
 		statusText: response.statusText,
@@ -516,6 +536,20 @@ function safeErrorCode(error: unknown): string {
 	return error instanceof ApiError && error.code
 		? error.code
 		: "internal_error";
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+	return error instanceof ApiError && error.code === code;
+}
+
+function logInternalFailure(event: string, error: unknown): void {
+	console.error(
+		JSON.stringify({
+			event,
+			status: "failed",
+			code: safeErrorCode(error),
+		}),
+	);
 }
 
 async function requireDeviceSecret(
