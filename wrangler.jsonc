@@ -40,7 +40,7 @@
 	// Refresh OAuth credentials every ten minutes when they are close to expiry.
 	"triggers": {
 		"crons": ["*/10 * * * *"]
-	},
+	}
 
 	/**
 	 * Smart Placement
