@@ -1,16 +1,17 @@
-import { ApiError } from "./errors";
-import { openJson, sealJson } from "./crypto";
+import { ApiError } from "../shared/api-error";
 import {
 	isRecord,
 	numberField,
 	recordField,
 	stringField,
 	type JsonObject,
-} from "./types";
+} from "../shared/json";
+import { openJson, sealJson } from "./envelope";
 
 const OAUTH_KEY = "oauth";
 const OAUTH_ENVELOPE_PURPOSE = "codex-worker/oauth/v1";
 const DEFAULT_TOKEN_LIFETIME_MS = 55 * 60 * 1000;
+const MAX_OAUTH_ENVELOPE_CHARS = 128 * 1024;
 
 export interface CodexCredentials {
 	token: string;
@@ -51,19 +52,8 @@ export async function getCodexCredentials(
 	}
 	return {
 		token: credentials.accessToken,
-		accountId: credentials.accountId,
+		...(credentials.accountId ? { accountId: credentials.accountId } : {}),
 	};
-}
-
-export async function oauthRecordExists(
-	env: Pick<Env, "AUTH_KV">,
-): Promise<boolean> {
-	return (
-		(await env.AUTH_KV.get(OAUTH_KEY, {
-			type: "text",
-			cacheTtl: 30,
-		})) !== null
-	);
 }
 
 export async function requireOAuthUnconfigured(
@@ -87,6 +77,9 @@ export async function readOAuthCredentials(
 		cacheTtl: 30,
 	});
 	if (encrypted === null) return null;
+	if (encrypted.length > MAX_OAUTH_ENVELOPE_CHARS) {
+		throw invalidStoredCredentials();
+	}
 
 	try {
 		const value = await openJson(
@@ -185,7 +178,9 @@ function decodeJwt(token: string | undefined): JsonObject | undefined {
 	const parts = token.split(".");
 	if (parts.length !== 3) return undefined;
 	try {
-		const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+		const payload = parts[1];
+		if (!payload) return undefined;
+		const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
 		const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
 		const bytes = Uint8Array.from(atob(padded), (character) =>
 			character.charCodeAt(0),

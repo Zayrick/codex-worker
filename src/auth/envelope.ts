@@ -1,4 +1,4 @@
-import { isRecord } from "./types";
+import { isRecord } from "../shared/json";
 
 const AES_KEY_BYTES = 32;
 const AES_GCM_IV_BYTES = 12;
@@ -11,7 +11,7 @@ interface EncryptedEnvelope {
 	ciphertext: string;
 }
 
-export class SecretEnvelopeError extends Error {
+class SecretEnvelopeError extends Error {
 	constructor() {
 		super("Secret material is unavailable.");
 		this.name = "SecretEnvelopeError";

@@ -57,6 +57,10 @@ jspm_packages/
 
 web_modules/
 
+# pnpm package store
+
+.pnpm-store/
+
 # TypeScript cache
 
 \*.tsbuildinfo
@@ -92,6 +96,21 @@ web_modules/
 
 .yarn-integrity
 
+# Machine-local dotenv configuration; empty examples document variable names safely.
+
+.env
+.env.*
+!.env.example
+
+# Cloudflare Workers local secrets; the empty example documents required bindings.
+
+.dev.vars*
+!.dev.vars.example
+
+# Cloudflare Workers generated local state
+
+.wrangler/
+
 # parcel-bundler cache (https://parceljs.org/)
 
 .cache
@@ -106,6 +125,7 @@ out
 
 .nuxt
 dist
+.output
 
 # Gatsby files
 
@@ -124,7 +144,15 @@ dist
 # vuepress v2.x temp and cache directory
 
 .temp
-.cache
+
+# SvelteKit cache directory
+
+.svelte-kit/
+
+# VitePress build output and cache
+
+**/.vitepress/dist
+**/.vitepress/cache
 
 # Docusaurus cache and generated files
 
@@ -142,6 +170,10 @@ dist
 
 .dynamodb/
 
+# Firebase cache directory
+
+.firebase/
+
 # TernJS port file
 
 .tern-port
@@ -150,17 +182,22 @@ dist
 
 .vscode-test
 
-# yarn v2
+# Yarn modern releases
 
-.yarn/cache
-.yarn/unplugged
-.yarn/build-state.yml
-.yarn/install-state.gz
-.pnp.\*
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
 
-# wrangler project
+# Vite temporary files
 
-.dev.vars*
-.env*
-!.env.example
-.wrangler/
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+.vite/
+
+# Editor and operating-system metadata
+
+.DS_Store

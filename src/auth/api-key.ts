@@ -1,4 +1,5 @@
-import { ApiError } from "./errors";
+import { ApiError } from "../shared/api-error";
+import { equalDigests, sha256Text } from "./constant-time";
 
 const API_KEY_PREFIX = "API-";
 const MAX_API_KEY_LENGTH = 512;
@@ -14,7 +15,7 @@ export async function authenticateClient(
 	const token = clientToken(request);
 	if (!token || token.length > MAX_API_KEY_LENGTH) throw invalidApiKey();
 
-	const tokenDigest = await digest(token);
+	const tokenDigest = await sha256Text(token);
 	let cursor: string | undefined;
 	while (true) {
 		const page = await env.AUTH_KV.list({
@@ -46,32 +47,19 @@ async function pageContainsApiKey(
 		const names = keyNames.slice(offset, offset + BULK_READ_SIZE);
 		const values = await kv.get(names, { type: "text", cacheTtl: 30 });
 		const candidateDigests = await Promise.all(
-			Array.from(values.values(), (value) => digest(value ?? DUMMY_API_KEY)),
+			Array.from(values.values(), (value) =>
+				sha256Text(value ?? DUMMY_API_KEY),
+			),
 		);
 		if (
 			candidateDigests.some((candidate) =>
-				crypto.subtle.timingSafeEqual(tokenDigest, candidate),
+				equalDigests(tokenDigest, candidate),
 			)
 		) {
 			return true;
 		}
 	}
 	return false;
-}
-
-export async function constantTimeEqual(
-	left: string,
-	right: string,
-): Promise<boolean> {
-	const [leftDigest, rightDigest] = await Promise.all([
-		digest(left),
-		digest(right),
-	]);
-	return crypto.subtle.timingSafeEqual(leftDigest, rightDigest);
-}
-
-function digest(value: string): Promise<ArrayBuffer> {
-	return crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
 }
 
 function clientToken(request: Request): string {

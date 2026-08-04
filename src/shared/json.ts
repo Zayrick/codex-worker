@@ -1,7 +1,7 @@
 export type JsonObject = Record<string, unknown>;
 
 export function isRecord(value: unknown): value is JsonObject {
-	return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+	return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function stringField(

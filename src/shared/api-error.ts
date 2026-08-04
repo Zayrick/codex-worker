@@ -1,4 +1,4 @@
-import type { JsonObject } from "./types";
+import { isRecord, type JsonObject } from "./json";
 
 export class ApiError extends Error {
 	constructor(
@@ -26,7 +26,7 @@ export function errorPayload(error: ApiError): JsonObject {
 
 export function normalizeError(error: unknown): ApiError {
 	if (error instanceof ApiError) return error;
-	if (error instanceof DOMException && error.name === "AbortError") {
+	if (isAbortError(error)) {
 		return new ApiError(
 			408,
 			"The request was cancelled or timed out.",
@@ -42,8 +42,12 @@ export function normalizeError(error: unknown): ApiError {
 	);
 }
 
+export function isAbortError(error: unknown): error is DOMException {
+	return error instanceof DOMException && error.name === "AbortError";
+}
+
 export function requireRecord(value: unknown, label = "request body"): JsonObject {
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
+	if (!isRecord(value)) {
 		throw new ApiError(
 			400,
 			`The ${label} must be a JSON object.`,
@@ -51,7 +55,7 @@ export function requireRecord(value: unknown, label = "request body"): JsonObjec
 			"invalid_json",
 		);
 	}
-	return value as JsonObject;
+	return value;
 }
 
 export function requireString(
@@ -70,4 +74,3 @@ export function requireString(
 	}
 	return value;
 }
-

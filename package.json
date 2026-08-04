@@ -2,18 +2,24 @@
 	"name": "codex-worker",
 	"version": "0.0.0",
 	"private": true,
+	"packageManager": "pnpm@11.18.0",
+	"engines": {
+		"node": ">=22"
+	},
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest",
-		"cf-typegen": "wrangler types"
+		"typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json",
+		"cf-typegen": "wrangler types",
+		"check": "wrangler types --check && pnpm run typecheck && vitest run && wrangler deploy --dry-run"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.12.4",
+		"@cloudflare/vitest-pool-workers": "^0.20.1",
 		"@types/node": "^26.1.2",
-		"typescript": "^5.5.2",
-		"vitest": "~3.2.0",
-		"wrangler": "^4.115.0"
+		"typescript": "^5.9.3",
+		"vitest": "^4.1.0",
+		"wrangler": "^4.118.0"
 	}
 }

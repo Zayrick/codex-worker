@@ -6,19 +6,19 @@
 		"target": "es2024",
 		/* Specify a set of bundled library declaration files that describe the target runtime environment. */
 		"lib": ["es2024"],
-		/* Specify what JSX code is generated. */
+		/* Specify the JSX transform used when compiling TSX source files. */
 		"jsx": "react-jsx",
 
 		/* Specify what module code is generated. */
 		"module": "es2022",
 		/* Specify how TypeScript looks up a file from a given module specifier. */
 		"moduleResolution": "Bundler",
-		/* Enable importing .json files */
+		/* Enable importing JSON modules. */
 		"resolveJsonModule": true,
 
-		/* Allow JavaScript files to be a part of your program. Use the `checkJS` option to get errors from these files. */
+		/* Allow JavaScript files to be part of the project when an include pattern selects them. */
 		"allowJs": true,
-		/* Enable error reporting in type-checked JavaScript files. */
+		/* Do not report type errors from selected JavaScript files. */
 		"checkJs": false,
 
 		/* Disable emitting files from a compilation. */
@@ -26,17 +26,21 @@
 
 		/* Ensure that each file can be safely transpiled without relying on other imports. */
 		"isolatedModules": true,
-		/* Allow 'import x from y' when a module doesn't have a default export. */
+		/* Allow default-import syntax for modules without a declared default export. */
 		"allowSyntheticDefaultImports": true,
 		/* Ensure that casing is correct in imports. */
 		"forceConsistentCasingInFileNames": true,
 
 		/* Enable all strict type-checking options. */
 		"strict": true,
+		/* Distinguish a missing optional property from an explicitly supplied undefined value. */
+		"exactOptionalPropertyTypes": true,
+		/* Require callers to account for an array index or object key being absent. */
+		"noUncheckedIndexedAccess": true,
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
 
-		/* Skip type checking all .d.ts files. */
+		/* Skip type checking declaration files supplied by dependencies and Wrangler. */
 		"skipLibCheck": true,
 		"types": [
 			"./worker-configuration.d.ts",

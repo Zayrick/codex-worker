@@ -7,54 +7,70 @@
 	"name": "codex-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-29",
-		"observability": {
-		"enabled": true
+	// Persist structured Worker logs and upload source maps for readable production traces.
+	"observability": {
+	"enabled": true
 	},
 	"upload_source_maps": true,
 	"compatibility_flags": [
-		"nodejs_compat"
+		// Required by node:zlib, which is used to decode Codex zstd request bodies.
+		"nodejs_compat",
+		// Makes the incoming Request.signal available so client disconnects can cancel upstream work.
+		"enable_request_signal"
 	],
+
+	// Non-secret application configuration may be committed under vars.
 	"vars": {
-		"CODEX_RELAY_URL": "https://codex-relay.oxio.uno/backend-api/codex/responses",
 		"CORS_ORIGIN": "*"
 	},
+
+	// Local development and deployed environments supply these sensitive bindings as secrets.
+	// Required names support configuration validation and generated Env types.
 	"secrets": {
-		"required": ["OAUTH_MASTER_KEY"]
+		"required": ["CODEX_RELAY_URL", "DEVICE_AUTH_SECRET", "OAUTH_MASTER_KEY"]
 	},
+
+	// Stores opaque API-key records and the encrypted OAuth credential envelope.
 	"kv_namespaces": [
 		{
 			"binding": "AUTH_KV"
 		}
 	],
+
+	// Refresh OAuth credentials every ten minutes when they are close to expiry.
 	"triggers": {
 		"crons": ["*/10 * * * *"]
-	}
-		/**
+	},
+
+	/**
 	 * Smart Placement
 	 * https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
 	 */
-	// "placement": {  "mode": "smart" }
+	// "placement": { "mode": "smart" },
+
 	/**
 	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
+	 * Bindings allow your Worker to interact with resources such as databases,
+	 * object storage, AI inference, real-time communication, and other Workers.
 	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
 	 */
+
 	/**
 	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 * Note: Use secrets to store sensitive data.
+	 * Use vars only for non-secret configuration. Store credentials as secrets.
+	 * https://developers.cloudflare.com/workers/configuration/environment-variables/
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
 	 */
-	// "vars": {  "MY_VARIABLE": "production_value" }
+
 	/**
 	 * Static Assets
 	 * https://developers.cloudflare.com/workers/static-assets/binding/
 	 */
-	// "assets": {  "directory": "./public/",  "binding": "ASSETS" }
+	// "assets": { "directory": "./public/", "binding": "ASSETS" },
+
 	/**
 	 * Service Bindings (communicate between multiple Workers)
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
+	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/
 	 */
-	// "services": [  {   "binding": "MY_SERVICE",   "service": "my-service"  } ]
+	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
 }

@@ -1,0 +1,5 @@
+# Documents the secret bindings required by the Worker during local development.
+# Values are intentionally empty so the required names remain versioned without credentials.
+OAUTH_MASTER_KEY=
+DEVICE_AUTH_SECRET=
+CODEX_RELAY_URL=
