@@ -13,7 +13,7 @@ OpenAI client → Cloudflare Worker → Caddy → ChatGPT Codex
 
 ## 结构与边界
 
-源码已按 `app / auth / codex / chat / http / openai / shared` 的职责边界组织。
+源码已按 `app / auth / codex / chat / completions / http / openai / shared` 的职责边界组织。
 `src/index.ts` 只负责组合 Worker handlers；协议转换、OAuth、KV、网络 I/O 与通用原语
 各自独立。完整目录、依赖方向、请求流与修改准则见
 [架构说明](docs/architecture.md)。
@@ -64,26 +64,37 @@ KV 数据。`OAUTH_MASTER_KEY` 必须是 32 个随机字节的 base64url 编码�
 需要任意一个 `API-*` 值：
 
 - `GET /v1/models`
-- `POST /v1/responses`
-- `POST /v1/responses/compact`
-- `POST /v1/chat/completions`
+- 协议转换：`POST /v1/chat/completions`、`POST /v1/completions`；
+- Codex 原生：`POST /v1/responses`、`POST /v1/responses/compact`、
+  `/v1/images/*`、`POST /v1/alpha/search`；
+- HTTP/WebSocket 传输：`/v1/videos/*`、`/v1/messages*`、`/v1/live*`、
+  `/v1/realtime*`、`/v1beta/*`、`/openai/v1/videos/*`；
+- Codex CLI 直连别名：`/backend-api/codex/*`。
 
-客户端可使用 `Authorization: Bearer sk-...` 或 `X-Api-Key: sk-...`；同时提供时，
-格式正确的 Bearer token 优先且不会在校验失败后回退到 `X-Api-Key`。Responses
-直接返回 Codex SSE；Chat Completions 根据 `stream` 返回 JSON 或 SSE。
+客户端可使用 `Authorization: Bearer sk-...`、`X-Api-Key: sk-...`，Gemini SDK 也可
+使用 `X-Goog-Api-Key: sk-...`。同时提供时按 Bearer、`X-Api-Key`、
+`X-Goog-Api-Key` 排序选择，已选值校验失败后不会回退。Responses
+直接返回 Codex SSE；Chat 与旧版 Completions 根据 `stream` 返回 JSON 或 SSE。
 缺少或提交错误 API key 时返回空正文 `404`。API key 通过后，上游错误的状态与正文
-保持透传；响应头只保留内容类型、重试时间、请求 ID 与 Codex turn state，避免把
-cookie 或内部边界 header 暴露给客户端。
+保持透传；透明路径支持 multipart/二进制请求、Range 响应与 WebSocket Upgrade，
+同时过滤 OAuth、cookie、内部边界和 hop-by-hop header。
+
+“存在路由”不等于“单一 ChatGPT OAuth 实现了所有供应商协议”。哪些路径由 Worker
+转换、哪些映射到 Codex 原生接口、哪些只保证传输，以及 relay 必须如何分流，见
+[兼容矩阵与 Cloudflare 边界](docs/compatibility.md)。
 
 JSON 请求的编码体以及 zstd 解压后的结果均不得超过 4 MiB。超过限制时返回
 OpenAI error envelope 格式的 `413 request_too_large`。
 Chat 转换还会把单个 SSE 事件与累计持久状态分别限制为 8,388,608 个 JavaScript
 字符单元，并最多保留 128 个工具调用和 384 个工具 alias；超限视为上游流失败，
 避免长连接无界占用 Worker 内存。
+透明图片、视频、Messages、v1beta 与 Codex 别名路径不解析或缓冲完整正文，因此
+不受这个应用层 4 MiB JSON 上限约束，但仍受 Cloudflare 套餐请求体、128 MB isolate
+内存和 WebSocket 单消息上限影响。
 
-四个已知 API 路径的 `OPTIONS` 预检返回带 CORS 的空正文 `204`。除此之外的全部
-路径与方法（包括 `/`、未列出的 `/v1/*` 和错误方法）均返回空正文 `404`。Worker
-自己生成的 `404` 与健康检查 `204` 不附带 HTML、JSON 或说明文本。
+所有已知 API 路径族的 `OPTIONS` 预检返回带 CORS 的空正文 `204`。除此之外的全部
+路径与不支持的方法（包括 `/` 和未列出的 `/v1/*`）均返回空正文 `404`。Worker 自己
+生成的 `404` 与健康检查 `204` 不附带 HTML、JSON 或说明文本。
 
 设备登录只在 KV 中不存在 `oauth` 时开放，作为单会话部署的覆盖保护。KV 不支持
 原子的 create-if-absent，因此不要并行启动多个设备登录会话。
@@ -100,12 +111,16 @@ pnpm install
 pnpm exec wrangler login
 ```
 
-首次部署前复制 `.env.example` 为不会提交到 Git 的 `.env.production`，并写入部署
-secrets：
+本地调试使用 Cloudflare 惯用的 `.dev.vars`。先复制不含值的示例，再填写仅供本地
+使用的凭据：
 
 ```powershell
-Copy-Item .env.example .env.production
+Copy-Item .dev.vars.example .dev.vars
+pnpm dev
 ```
+
+首次部署前，另行创建不会提交到 Git 的 `.env.production`，并填写生产 secrets。
+这个文件只作为 Wrangler 的批量上传文件，不参与本地调试：
 
 ```dotenv
 OAUTH_MASTER_KEY=<32 个随机字节的 base64url 编码>
@@ -123,8 +138,8 @@ pnpm exec wrangler deploy --secrets-file .env.production
 已有这些 secrets 的后续部署可直接运行 `pnpm deploy`。然后在 Cloudflare 面板绑定的
 KV namespace 中新增 `API-<id>`，值设为准备让客户端提交的 key，例如 `sk-...`。
 
-不要提交 `.env.production`；项目的 `.gitignore` 会忽略此类 secret 文件，仅允许
-提交不含值的 `.env.example`。
+不要提交 `.dev.vars` 或 `.env.production`；项目的 `.gitignore` 会忽略实际 secret
+文件，仅允许提交不含值的 `.dev.vars.example`。
 
 部署后直接在浏览器访问：
 
@@ -173,7 +188,7 @@ Cloudflare WAF/Rate Limiting 限制未认证流量。若 key 数量会持续增�
 - Worker 自己生成的错误响应不包含 OAuth token、API key、主密钥、IV 或密文；
 - 已通过 API key 鉴权的请求会收到原始上游错误状态与正文，但只透传安全响应头；
 - `.dev.vars*` 和 `.env*` 被 Git 忽略；
-- 测试通过隔离的 Workers 测试环境注入虚拟凭据，不读取真实用户凭据。
+- 测试通过隔离的 Workers 测试环境覆盖为虚拟凭据，测试 Worker 不使用本地真实值。
 
 ## Caddy relay
 
@@ -193,7 +208,11 @@ your-relay.example.com {
 ```
 
 Cloudflare 会给 Worker 子请求添加 `CF-Worker`，而 ChatGPT 可能拒绝该请求；Caddy
-通过建立新的上游连接解决这一问题。
+通过建立新的上游连接解决这一问题。该示例只覆盖同一 ChatGPT Codex origin；若要
+让 `/v1/videos/*`、`/openai/v1/videos/*`、`/v1/messages*`、`/v1/live*`、
+`/v1/realtime*` 或 `/v1beta/*`
+获得协议级可用性，relay 还必须按路径分流到实际供应商并提供适用凭据。Caddy 可
+自动反代 WebSocket，但仍需验证 Upgrade、子协议、SSE 和二进制流没有被中间层缓冲。
 
 ## 检查
 

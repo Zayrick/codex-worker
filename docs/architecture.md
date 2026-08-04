@@ -23,6 +23,7 @@ src/
 ├── codex/                   Codex 请求策略与网络客户端
 │   ├── request-policy.ts
 │   ├── client.ts
+│   ├── proxy.ts
 │   ├── event-stream.ts
 │   └── stream-error.ts
 ├── chat/                    Chat Completions ↔ Responses 适配
@@ -39,6 +40,12 @@ src/
 │   ├── stream-presenter.ts
 │   ├── stream.ts
 │   └── types.ts
+├── completions/             旧版 Completions ↔ Chat/Responses 适配
+│   ├── request.ts
+│   ├── response.ts
+│   └── stream.ts
+├── live/                    Realtime bootstrap 的有限请求适配
+│   └── request.ts
 ├── http/                    HTTP/SSE 表示与设备登录 HTML
 │   ├── body.ts
 │   ├── device-page.ts
@@ -58,6 +65,7 @@ src/
 ```text
 test/
 ├── app/fetch-handler.spec.ts
+├── app/proxy-handler.spec.ts
 ├── auth/
 │   ├── api-key.spec.ts
 │   ├── device-flow.spec.ts
@@ -66,6 +74,7 @@ test/
 ├── chat/
 │   ├── adaptation.spec.ts
 │   └── response.spec.ts
+├── completions/compatibility.spec.ts
 ├── codex/client.spec.ts
 ├── shared/limited-body.spec.ts
 └── support/
@@ -77,9 +86,11 @@ test/
 ## 依赖方向
 
 ```text
-index → app → auth / chat / codex / http / openai → shared
+index → app → auth / chat / completions / live / codex / http / openai → shared
 chat → codex event-stream / request-policy
 chat → http SSE encoder
+completions → chat / http SSE encoder
+codex proxy → live request adapter
 codex client → auth credentials
 http device-page ── type only ─→ auth device-flow
 ```
@@ -106,6 +117,17 @@ fetch-handler
   → OpenAI JSON、Responses SSE 或 Chat SSE 表示
 ```
 
+透明 HTTP/WebSocket 请求：
+
+```text
+fetch-handler
+  → 路径族与方法匹配
+  → API-* 鉴权
+  → codex/proxy
+  → 清理客户端/边界 header、写入 OAuth
+  → relay（流式正文或 Response.webSocket 直接交接）
+```
+
 OAuth 设备登录：
 
 ```text
@@ -125,14 +147,15 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
 
 ## 稳定契约
 
-- 未匹配路由、错误方法、无效客户端 key 和无效设备 secret 均返回无正文、无 CORS
+- 未匹配路由、不支持的方法、无效客户端 key 和无效设备 secret 均返回无正文、无 CORS
   的 `404`。
-- 只有已确认的 API/设备路由响应会添加 CORS；四个 API 路径支持无鉴权的
+- 只有已确认的 API/设备路由响应会添加 CORS；已知 API 路径族支持无鉴权的
   `OPTIONS` 预检，未知路径仍隐藏为 `404`。
 - Worker 生成的错误使用统一 OpenAI error envelope；已鉴权请求的上游错误保持状态与
-  正文，响应头经过最小 allowlist 后再透传。
-- JSON 请求的编码体与 zstd 解码结果均限制为 4 MiB；OAuth 和模型目录使用更小的
-  专用上限。
+  正文。结构化 API 使用最小响应头 allowlist；透明代理使用 denylist 删除 cookie、
+  hop-by-hop、Cloudflare 和内部服务 header，同时保留媒体/范围/WebSocket 所需 header。
+- 需要解析的 JSON 请求编码体与 zstd 解码结果均限制为 4 MiB；OAuth 和模型目录使用
+  更小的专用上限。透明代理只流式转交正文，不套用 4 MiB JSON 上限。
 - OAuth credentials 与设备 state 的 AES-GCM purpose string 和 envelope schema 是
   持久化兼容契约，不可随意修改。
 - `OAUTH_MASTER_KEY` 只用于加密，`DEVICE_AUTH_SECRET` 只在设备表单 POST body 中
@@ -144,6 +167,10 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
   产生漂移；单个 SSE 事件和 Chat 持久状态都有字符预算，工具调用与 alias 也有数量
   上限；终态只提取必要的 model、usage 与 incomplete reason，不重复保留完整 response，
   避免长流无界或重复占用 Worker 内存。
+- 旧版 Completions 复用 Chat → Responses 转换与 Chat 事件 reducer，只在最外层转换
+  prompt、`text_completion` envelope 和 SSE chunk，避免维护第二套 Codex 事件解释器。
+- 透明代理的“传输兼容”不等于上游“协议兼容”；Codex 原生路径映射、供应商路径分流、
+  WebSocket 直交和 Realtime 媒体面边界以 `docs/compatibility.md` 为准。
 - KV 的设备登录检查后写入不是原子事务，API key 鉴权也按设计扫描少量 `API-*`；
   需要并发排他或大量 key 时，分别迁移到 Durable Object/D1 与摘要寻址模型。
 

@@ -106,11 +106,20 @@ describe("API-* value authentication", () => {
 		await expectEmptyResponse(missing, 404);
 	});
 
-	it("accepts X-Api-Key and gives a valid Bearer token precedence", async () => {
+	it("accepts SDK API-key headers and gives a valid Bearer token precedence", async () => {
 		await expect(
 			authenticateClient(
 				new Request("https://example.com/v1/models", {
 					headers: { "X-Api-Key": `  ${CLIENT_API_KEY}  ` },
+				}),
+				env,
+			),
+		).resolves.toBeUndefined();
+
+		await expect(
+			authenticateClient(
+				new Request("https://example.com/v1beta/models", {
+					headers: { "X-Goog-Api-Key": `  ${CLIENT_API_KEY}  ` },
 				}),
 				env,
 			),

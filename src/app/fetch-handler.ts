@@ -1,5 +1,9 @@
 import { authenticateClient } from "../auth/api-key";
 import { getCodexCredentials } from "../auth/credentials";
+import {
+	isCodexProxyPath,
+	isWebSocketUpgrade,
+} from "../codex/proxy";
 import { emptyResponse, withCors } from "../http/response";
 import { hasErrorCode, logFailure } from "../shared/logging";
 import { handleApiRoute, type ApiRoute } from "./api-handler";
@@ -21,18 +25,29 @@ export async function handleFetch(
 		return withCors(emptyResponse(204), env.CORS_ORIGIN);
 	}
 
-	const apiRoute = matchApiRoute(request.method, url.pathname);
+	const apiRoute = matchApiRoute(request, url.pathname);
 	if (!apiRoute || !(await apiClientAuthenticated(request, env))) {
 		return emptyResponse(404);
 	}
 	return handleApiRoute(apiRoute, request, url, env, ctx);
 }
 
-function matchApiRoute(method: string, pathname: string): ApiRoute | undefined {
+function matchApiRoute(request: Request, pathname: string): ApiRoute | undefined {
 	const route = matchApiPath(pathname);
 	if (!route) return undefined;
-	if (route === "models") return method === "GET" ? route : undefined;
-	return method === "POST" ? route : undefined;
+	if (route === "models") return request.method === "GET" ? route : undefined;
+	if (route === "responses") {
+		if (request.method === "POST") return route;
+		return request.method === "GET" && isWebSocketUpgrade(request)
+			? "proxy"
+			: undefined;
+	}
+	if (route === "proxy") {
+		return request.method !== "OPTIONS" && request.method !== "CONNECT"
+			? route
+			: undefined;
+	}
+	return request.method === "POST" ? route : undefined;
 }
 
 function matchApiPath(pathname: string): ApiRoute | undefined {
@@ -40,13 +55,21 @@ function matchApiPath(pathname: string): ApiRoute | undefined {
 		case "/v1/models":
 			return "models";
 		case "/v1/responses":
+		case "/v1/responses/":
+		case "/backend-api/codex/responses":
+		case "/backend-api/codex/responses/":
 			return "responses";
 		case "/v1/responses/compact":
+		case "/v1/responses/compact/":
+		case "/backend-api/codex/responses/compact":
+		case "/backend-api/codex/responses/compact/":
 			return "compact";
 		case "/v1/chat/completions":
 			return "chat_completions";
+		case "/v1/completions":
+			return "completions";
 		default:
-			return undefined;
+			return isCodexProxyPath(pathname) ? "proxy" : undefined;
 	}
 }
 

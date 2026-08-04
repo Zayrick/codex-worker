@@ -131,7 +131,7 @@ async function fetchCodex(url: URL, init: RequestInit): Promise<Response> {
 	return response;
 }
 
-function resolveRelayUrl(relayUrl: string): URL {
+export function resolveRelayUrl(relayUrl: string): URL {
 	let url: URL;
 	try {
 		url = new URL(relayUrl);

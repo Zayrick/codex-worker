@@ -154,7 +154,7 @@ describe("routing and model compatibility", () => {
 		expect(await response.json()).toEqual(CODEX_MODELS);
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
 		expect(response.headers.get("access-control-allow-methods")).toBe(
-			"GET, POST, OPTIONS",
+			"GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS",
 		);
 		expect(response.headers.get("access-control-allow-headers")).toContain(
 			"X-Api-Key",
@@ -218,6 +218,8 @@ describe("routing and model compatibility", () => {
 		["Responses", "POST", "/v1/responses"],
 		["compaction", "POST", "/v1/responses/compact"],
 		["Chat Completions", "POST", "/v1/chat/completions"],
+		["legacy Completions", "POST", "/v1/completions"],
+		["image generation", "POST", "/v1/images/generations"],
 	])("hides $0 when the API key is absent or incorrect", async (_name, method, path) => {
 		for (const apiKey of [
 			undefined,

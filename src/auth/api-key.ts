@@ -65,7 +65,9 @@ async function pageContainsApiKey(
 function clientToken(request: Request): string {
 	const authorization = request.headers.get("Authorization");
 	const bearer = authorization?.match(/^Bearer\s+([^\s]+)\s*$/i)?.[1];
-	return bearer ?? request.headers.get("x-api-key")?.trim() ?? "";
+	const apiKey = request.headers.get("x-api-key")?.trim();
+	const googleApiKey = request.headers.get("x-goog-api-key")?.trim();
+	return bearer ?? (apiKey || googleApiKey || "");
 }
 
 function invalidApiKey(): ApiError {

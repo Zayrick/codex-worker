@@ -1,8 +1,12 @@
 import { chatRequestToResponses } from "../chat/request";
 import { chatCompletionFromEventStream } from "../chat/response";
 import { createChatCompletionStream } from "../chat/stream";
+import { completionRequestToResponses } from "../completions/request";
+import { completionFromChat } from "../completions/response";
+import { createCompletionStream } from "../completions/stream";
 import { fetchCodexModels, sendPreparedCompact, sendPreparedResponses } from "../codex/client";
 import { decodeSseStream } from "../codex/event-stream";
+import { forwardCodexProxy } from "../codex/proxy";
 import { prepareCompactRequest, prepareResponsesRequest } from "../codex/request-policy";
 import { parseJsonBody } from "../http/body";
 import {
@@ -12,13 +16,20 @@ import {
 	jsonResponse,
 	upstreamErrorResponse,
 	upstreamJsonResponse,
+	upstreamProxyResponse,
 	withCors,
 } from "../http/response";
 import { toOpenAiModelList } from "../openai/models";
 import { ApiError, errorPayload, normalizeError } from "../shared/api-error";
 import { logFailure } from "../shared/logging";
 
-export type ApiRoute = "models" | "responses" | "compact" | "chat_completions";
+export type ApiRoute =
+	| "models"
+	| "responses"
+	| "compact"
+	| "chat_completions"
+	| "completions"
+	| "proxy";
 
 export async function handleApiRoute(route: ApiRoute, request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
 	try {
@@ -42,6 +53,10 @@ async function dispatchApiRoute(route: ApiRoute, request: Request, url: URL, env
 			return handleCompact(request, env);
 		case "chat_completions":
 			return handleChatCompletions(request, env, ctx);
+		case "completions":
+			return handleCompletions(request, env, ctx);
+		case "proxy":
+			return handleProxy(request, url, env);
 	}
 }
 
@@ -77,6 +92,49 @@ async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionC
 	}
 
 	return jsonResponse(await chatCompletionFromEventStream(decodeSseStream(body), adapted.model));
+}
+
+async function handleCompletions(
+	request: Request,
+	env: Env,
+	ctx: ExecutionContext,
+): Promise<Response> {
+	const adapted = completionRequestToResponses(
+		await parseJsonBody(request),
+		request.headers,
+	);
+	const upstream = await sendPreparedResponses(
+		adapted.body,
+		env,
+		requestOptions(request),
+	);
+	if (!upstream.ok) return upstreamErrorResponse(upstream);
+	const body = requireBody(upstream);
+	if (adapted.stream) {
+		const chatStream = createChatCompletionStream(
+			body,
+			{ model: adapted.model, includeUsage: adapted.includeUsage },
+			ctx,
+		);
+		return chatSseResponse(
+			createCompletionStream(chatStream, adapted.echoPrefix),
+			upstream.headers,
+		);
+	}
+
+	const chat = await chatCompletionFromEventStream(
+		decodeSseStream(body),
+		adapted.model,
+	);
+	return jsonResponse(completionFromChat(chat, adapted.echoPrefix));
+}
+
+async function handleProxy(
+	request: Request,
+	url: URL,
+	env: Env,
+): Promise<Response> {
+	return upstreamProxyResponse(await forwardCodexProxy(request, url, env));
 }
 
 function requestOptions(request: Request): {
