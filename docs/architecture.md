@@ -44,10 +44,27 @@ src/
 │   ├── request.ts
 │   ├── response.ts
 │   └── stream.ts
+├── messages/                Anthropic Messages ↔ Codex Responses 适配
+│   ├── request.ts
+│   ├── response.ts
+│   ├── stream.ts
+│   ├── error.ts
+│   ├── identifiers.ts
+│   ├── token-count.ts
+│   └── types.ts
+├── gemini/                  Gemini generateContent ↔ Codex Responses 适配
+│   ├── request.ts
+│   ├── response.ts
+│   ├── stream.ts
+│   ├── error.ts
+│   ├── models.ts
+│   ├── path.ts
+│   └── types.ts
 ├── live/                    Realtime bootstrap 的有限请求适配
 │   └── request.ts
 ├── http/                    HTTP/SSE 表示与管理面板 HTML
 │   ├── body.ts
+│   ├── cancellation.ts
 │   ├── admin-page.ts
 │   ├── response.ts
 │   └── sse-encoder.ts
@@ -76,6 +93,8 @@ test/
 │   ├── adaptation.spec.ts
 │   └── response.spec.ts
 ├── completions/compatibility.spec.ts
+├── messages/
+├── gemini/
 ├── codex/client.spec.ts
 ├── shared/limited-body.spec.ts
 └── support/
@@ -87,10 +106,12 @@ test/
 ## 依赖方向
 
 ```text
-index → app → auth / chat / completions / live / codex / http / openai → shared
+index → app → auth / chat / completions / messages / gemini / live / codex / http / openai → shared
 chat → codex event-stream
 chat → http SSE encoder
 completions → chat / http SSE encoder
+messages / gemini → codex event-stream / http SSE encoder
+gemini → messages identifiers / token count
 codex proxy → live request adapter
 codex client → auth credentials
 http admin-page → http response
@@ -98,15 +119,15 @@ http admin-page → http response
 
 - `index.ts` 只组合 Workers handlers，不放业务规则。
 - `app/` 决定“何时调用什么”，不实现加密、协议转换或上游网络细节。
-- Chat 与 Completions 适配器负责纯数据转换；`client.ts`、`proxy.ts`、OAuth provider、
-  KV credentials 负责 I/O。
+- Chat、Completions、Messages 与 Gemini 适配器负责纯数据转换；`client.ts`、`proxy.ts`、
+  OAuth provider、KV credentials 负责 I/O。
 - 功能模块直接引用 canonical 文件，不通过顶层 barrel 隐藏依赖。
 - `shared/` 只收纳至少被两个能力复用、且不含领域策略的原语。
 - `Env` 在边界处使用 `Pick` 收窄，避免函数隐式依赖全部 binding。
 
 ## 关键请求流
 
-需要协议转换的 Chat 与 Completions 请求：
+需要协议转换的 Chat、Completions、Messages 与 Gemini 请求：
 
 ```text
 fetch-handler
@@ -115,7 +136,7 @@ fetch-handler
   → api-handler
   → 有界 JSON 解码 / 协议转换
   → Codex client
-  → OpenAI JSON、Responses SSE 或 Chat SSE 表示
+  → OpenAI、Anthropic 或 Gemini JSON/SSE 表示
 ```
 
 Responses、compact 与 Responses WebSocket：
@@ -130,7 +151,8 @@ fetch-handler
   → relay（HTTP 响应流或双向 WebSocket 帧桥接）
 ```
 
-其他透明 HTTP/WebSocket 路径不进入角色适配，正文流或 `Response.webSocket` 直接交接。
+图片、Realtime 与 Codex 直连别名不进入供应商协议适配，正文流或
+`Response.webSocket` 直接交接。视频、Interactions 和未知供应商 action 不注册路由。
 
 管理面板与 OAuth 设备登录：
 
@@ -155,11 +177,13 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
 - 未匹配路由、不支持的方法和无效客户端 key 均返回无正文、无 CORS 的 `404`。
 - 只有已确认的公开 API 响应会添加 CORS；已知 API 路径族支持无鉴权的 `OPTIONS`
   预检。管理路由不添加 CORS，并要求 Cookie 会话及同源写请求。
-- Worker 生成的错误使用统一 OpenAI error envelope；已鉴权请求的上游错误保持状态与
-  正文。结构化 API 使用最小响应头 allowlist；透明代理使用 denylist 删除 cookie、
-  hop-by-hop、Cloudflare 和内部服务 header，同时保留媒体/范围/WebSocket 所需 header。
-- Chat、Completions、Responses 与 compact 的 JSON 请求编码体及 zstd 解码结果限制为
-  4 MiB；OAuth 和模型目录使用更小的专用上限。其他透明代理路径只流式转交正文。
+- Worker 生成的错误按入口协议使用 OpenAI、Anthropic 或 Google envelope；Messages 与
+  Gemini 还会把上游 HTML/非 JSON 错误收敛为安全 JSON。结构化 API 使用最小响应头
+  allowlist；透明代理使用 denylist 删除 cookie、hop-by-hop、Cloudflare 和内部服务
+  header，同时保留媒体/范围/WebSocket 所需 header。
+- Chat、Completions、Messages、Gemini、Responses 与 compact 的 JSON 请求编码体及 zstd
+  解码结果限制为 4 MiB；OAuth 和模型目录使用更小的专用上限。其他透明代理路径只流式
+  转交正文。
 - OAuth credentials、API_KEYS、设备 state 与管理会话分别使用独立 AES-GCM purpose
   string。`DATA_ENCRYPTION_KEY` 只负责加密；`ADMIN_SECRET` 只在登录表单 POST body 中
   传输。长期 secret 不得进入 URL；`ADMIN_PATH` 只是额外隐藏层，不能替代管理密钥。
@@ -171,6 +195,9 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
   避免长流无界或重复占用 Worker 内存。
 - 旧版 Completions 复用 Chat → Responses 转换与 Chat 事件 reducer，只在最外层转换
   prompt、`text_completion` envelope 和 SSE chunk，避免维护第二套 Codex 事件解释器。
+- Messages 与 Gemini 各自维护协议专属的命名事件/`data` SSE 表示，但共用取消传播、
+  Codex SSE 解码、长工具名映射和本地 token 计数。流转换使用背压写入并限制保留字符、
+  工具/输出项与 alias 数量；终止事件会按原始 output 顺序补齐缺失块。
 - 透明代理的“传输兼容”不等于上游“协议兼容”；Codex 原生路径映射、供应商路径分流、
   Responses WebSocket 帧桥接和 Realtime 媒体面边界以 `docs/compatibility.md` 为准。
 - KV 的设备登录检查后写入和 `API_KEYS` 读改写都不是原子事务；面板面向低频、单管理

@@ -12,8 +12,9 @@
 
 ## 路由矩阵
 
-除 `OPTIONS` 外，下表中的请求都需要 `API_KEYS` 加密记录中已启用的下游 Key。透明路由接受
-`GET`、`HEAD`、`POST`、`PUT`、`PATCH` 和 `DELETE`；`CONNECT` 不开放。
+除 `OPTIONS` 外，下表中的请求都需要 `API_KEYS` 加密记录中已启用的下游 Key。表中已写明
+方法的路由只接受该方法；Realtime sideband 还必须是 WebSocket Upgrade。图片与明确的
+Codex 直连别名可传输常规 HTTP 方法，`CONNECT` 一律不开放。
 
 | 客户端路径 | 级别 | Worker 行为与边界 |
 | --- | --- | --- |
@@ -23,20 +24,34 @@
 | `POST /v1/responses`、`POST /v1/responses/compact` | Codex 原生映射 | 路径映射到 `/backend-api/codex/responses*`；只把顶层 `input` 数组中 `role: "system"` 的项改为 `developer`，其余正文字段、查询参数、上游状态、内容类型和响应流保持不变。 |
 | `GET /v1/responses` + `Upgrade: websocket` | Codex 原生映射 | 建立双向 WebSocket 桥；识别客户端 `response.create` 与 `response.append` 文本帧并执行同一顶层 `input` 角色改写，事件类型和其他字段保持不变。 |
 | `/v1/images/generations`、`/v1/images/edits` | Codex 原生映射 | 映射到 `/backend-api/codex/images/*`。JSON、multipart 图片上传、SSE/JSON/二进制下载都按流处理；其他 `/v1/images/*` 动作是否存在由上游决定。 |
-| `/v1/videos/*` | 传输透传 | 方法、查询参数、正文和流式响应转交同源 relay。参考项目中的视频执行器是供应商专用实现；本 Worker 不把 Codex Responses 翻译成视频 API。 |
-| `/openai/v1/videos/*` | 传输透传 | 提供 OpenAI Videos 别名，包括创建、轮询和 `/content` 下载。 |
-| `/v1/messages`、`/v1/messages/count_tokens` | 传输透传 | 提供 Anthropic 风格路径和请求头传输，不进行 Messages ↔ Responses 的结构转换。relay 必须实现目标协议。 |
+| `POST /v1/messages` | 协议转换 | Anthropic Messages 请求转换为 Codex Responses；非流式结果转换为 Message JSON，`stream: true` 转换为带命名事件的 Anthropic SSE。支持 system、文本、图片、文档、thinking signature、客户端工具、工具结果、Web Search 块、tool choice、thinking effort、usage、stop reason 和 Anthropic error envelope。 |
+| `POST /v1/messages/count_tokens` | 本地转换 | 使用与创建请求相同的结构转换，再以本地 `cl100k_base` tokenizer 估算 `input_tokens`；不会访问 Anthropic token-count 服务，结果不保证与 Anthropic 自有 tokenizer 完全一致。 |
 | `POST /v1/alpha/search` | Codex 原生映射 | 映射到 `/backend-api/codex/alpha/search`。 |
 | `POST /v1/live` | Codex 原生映射 | 映射到 `/backend-api/codex/realtime/calls`；缺少时补 `intent=quicksilver` 与 `architecture=avas`。标准 multipart `sdp + session` 会转为 Codex JSON。 |
-| `/v1/live/*` | 传输透传 | 用于 call 状态或 sideband WebSocket；relay 负责路由到实际实时服务。 |
+| `GET /v1/live/{call_id}` | Codex 专用传输 | Sideband WebSocket 依据本地 Codex/CLIProxyAPI 实现直连 `api.openai.com` 的对应 `/v1/live/*` 路径，不经过 ChatGPT relay；事件帧不转换。 |
 | `POST /v1/realtime/calls` | Codex 原生映射 | 与 `/v1/live` 使用同一 bootstrap 映射、multipart 适配和默认查询参数。 |
-| `/v1/realtime`、`/v1/realtime/*` | 传输透传 | 支持普通 HTTP 与 WebSocket Upgrade；Worker 不转换 Realtime 事件。 |
-| `/v1beta/*` | 传输透传 | 覆盖 Gemini 风格 models、interactions 及其 action 路径；协议和 OAuth 语义由 relay 实现。 |
+| `GET /v1/realtime?call_id=...`、`GET /v1/realtime/calls/{call_id}` | Codex 专用传输 | Sideband WebSocket 直连本地参考实现指定的 Realtime origin；Worker 写入保存的 OAuth/账户头但不转换事件帧，并只保留经校验的 `call_id` 与规范化的 `intent` 查询参数。 |
+| `GET /v1beta/models`、`GET /v1beta/models/{model}` | 协议转换 | Codex 模型目录转换为 Gemini Model 资源。 |
+| `POST /v1beta/models/{model}:generateContent` | 协议转换 | Gemini Content、system instruction、内联/URI 媒体、function call/result、工具声明与 tool config 转为 Codex Responses；终态转为 Gemini candidates、parts、usageMetadata 和 finishReason。 |
+| `POST /v1beta/models/{model}:streamGenerateContent` | 协议转换 | 与 generateContent 使用同一请求转换，Codex SSE 增量转换为 Gemini SSE `data` 事件；流内失败使用 Google 风格 error envelope。 |
+| `POST /v1beta/models/{model}:countTokens` | 本地转换 | 支持顶层 `contents` 或嵌套 `generateContentRequest`，返回本地估算的 `totalTokens`。 |
 | `/backend-api/codex/*` | Codex CLI 直连别名 | 原样传输路径和查询参数；其中 Responses、compact 和 Responses WebSocket 采用上面相同的角色规则，其他正文流不解析。 |
 
-这张表表示 Worker 能做什么，不表示单一 ChatGPT OAuth 对所有供应商 API 都有权限。
-尤其是 `/v1/videos/*`、`/v1/messages*` 和 `/v1beta/*`：路由存在且传输兼容，但若
-relay 只反代 `chatgpt.com`，上游仍可能返回 `401`、`404` 或协议错误。
+视频 API、`/openai/v1/videos/*`、`/v1beta/interactions`、未知 Gemini action 和其他未列出
+的供应商路径不注册路由，返回空正文 `404`。`.reference/CLIProxyAPI` 的视频实现依赖
+供应商专用执行器，Interactions 也有独立的供应商鉴权面；它们不能仅凭 ChatGPT Codex
+OAuth 安全地映射到 Responses。低层 `/backend-api/codex/*` 别名仍只代表调用方明确选择
+Codex 私有路径，不承诺该私有 action 一定存在。
+
+Messages 字段与事件顺序以 Anthropic 的
+[Messages API](https://platform.claude.com/docs/en/api/messages/create)、
+[streaming events](https://platform.claude.com/docs/en/build-with-claude/streaming)、
+[error schema](https://platform.claude.com/docs/en/api/errors) 和
+[token counting](https://platform.claude.com/docs/en/api/messages/count_tokens) 为边界。
+Gemini action 与 Content/Part 结构以 Google 的
+[generateContent API](https://ai.google.dev/api/generate-content) 和
+[countTokens API](https://ai.google.dev/api/tokens) 为边界。转换规则同时对照
+`.reference/CLIProxyAPI`，Codex 请求与目标路径只依据 `.reference/codex`。
 
 Responses 路径不会补充正文默认值、删除字段，也不会根据 `prompt_cache_key` 等正文
 字段推导请求头。唯一的正文适配是顶层 `input` 消息项的 `system → developer`；发生
@@ -49,11 +64,18 @@ Responses 路径不会补充正文默认值、删除字段，也不会根据 `pr
 `user` 与 logprobs 不会传入 Codex；输出中的 `logprobs` 为 `null`。依赖这些采样或
 token 级语义的调用方不应把该路径视为完全等价的传统模型后端。
 
-## 透明正文传输
+Messages 会校验必需的 `model`、`messages` 与 `max_tokens`，但 Codex OAuth Responses
+不接受等价的 Anthropic token/sampling 控件，因此 `max_tokens`、`temperature`、`top_p`、
+`top_k`、`stop_sequences` 和 metadata 不转发；`cache_control` 也不伪造 Anthropic prompt
+cache 语义。Gemini 的 `generationConfig` 同样只转换 thinking level/budget，采样、候选数、
+停止序列与输出 MIME/schema 不送入 Codex。两种协议都会保留可安全往返的 Codex
+reasoning encrypted signature；其他供应商生成的签名不会冒充 Codex 签名重放。
+
+## 正文与流式传输
 
 Responses 与 compact 为执行角色改写而有界解析 JSON；Live/Realtime bootstrap 会解析
 multipart `sdp + session`。其他透明路由不会调用 `request.json()`、`formData()` 或
-`arrayBuffer()`，图片、视频或音频正文直接作为 `ReadableStream` 交给 relay。以下信息
+`arrayBuffer()`，图片或实时音频正文直接作为 `ReadableStream` 交给 relay。以下信息
 会保留：
 
 - HTTP 方法、查询参数、`Content-Type`、multipart boundary、`Range`、幂等键和
@@ -69,9 +91,9 @@ Cloudflare 内部头和 hop-by-hop 头，并强制 `Cache-Control: no-store`。
 重定向使用 `manual`，避免 OAuth 在未知重定向目标上自动重放。
 
 Live multipart 适配的正文上限为 16 MiB。需要解析或检查角色的 Chat、Completions、
-Responses 与 compact JSON 受项目自身 4 MiB 编码体/解压体上限约束；图片、视频、
-Messages、v1beta 和其他别名路径不受这个应用层 JSON 上限约束，但仍受 Cloudflare
-请求体与资源限制。
+Messages、Gemini、Responses 与 compact JSON 受项目自身 4 MiB 编码体/解压体上限
+约束；图片、Realtime 和其他 Codex 原生别名路径不受这个应用层 JSON 上限约束，但仍受
+Cloudflare 请求体与资源限制。
 
 ## WebSocket 行为
 
@@ -86,7 +108,7 @@ Messages、v1beta 和其他别名路径不受这个应用层 JSON 上限约束�
 - 上游拒绝握手时，其 HTTP 状态与正文经安全响应头过滤后返回；
 - `/v1/responses` 的普通 `GET` 不是 REST 操作，缺少 Upgrade 时继续隐藏为 `404`。
 
-Realtime、Live sideband 等其他透明 WebSocket 路径仍直接交接上游
+Realtime、Live sideband 等其他透明 WebSocket 路径仍直接交接专用上游
 `Response.webSocket`，不进入 Responses 帧适配。
 
 下游握手仍须提供本项目支持的 API-key header；服务端 SDK 和 Codex CLI 可以设置
@@ -103,7 +125,7 @@ Cloudflare 当前规定 Worker 收到的单条 WebSocket 消息最大为 32 MiB�
 ## Realtime 媒体面边界
 
 `/v1/live` 和 `/v1/realtime/calls` 的 HTTP bootstrap，以及 sideband WebSocket，属于
-信令/控制面，适合由 Worker 和 relay 转交。参考项目可选的 Pion relay 还包含 UDP
+信令/控制面，适合由 Worker 转交。参考项目可选的 Pion relay 还包含 UDP
 RTP/RTCP 媒体面；它不能直接移植进普通 Worker：Workers 的公开协议面提供入站
 HTTP/WebSocket 和出站 HTTP/TCP，没有通用 UDP socket API。
 
@@ -114,18 +136,19 @@ HTTP/WebSocket 和出站 HTTP/TCP，没有通用 UDP socket API。
 
 ## relay 路由要求
 
-`CODEX_RELAY_URL` 必须以 `/backend-api/codex/responses` 结尾。Worker 从它派生两类
-目标：
+`CODEX_RELAY_URL` 必须以 `/backend-api/codex/responses` 结尾。Worker 从它派生 Codex
+原生目标：
 
-1. Codex 原生路径使用同一 origin 下的 `/backend-api/codex/*`；
-2. 传输透传路径使用同一 origin 下客户端提交的 `/v1/*`、`/v1beta/*` 或
-   `/openai/v1/videos/*`。
+1. 所有结构转换最终提交到 `/backend-api/codex/responses`；
+2. 图片、Search、Realtime bootstrap 与明确的 Codex 直连别名使用同一 origin 下的
+   `/backend-api/codex/*`；
+3. Realtime/Live sideband 保留 `/v1/realtime*` 或 `/v1/live/*` 路径，并按
+   `.reference/codex` 与 `.reference/CLIProxyAPI` 的实现直连专用 Realtime origin。
 
-因此 relay 需要按路径把 Codex、OpenAI Realtime、视频供应商、Messages 或 Gemini
-协议送到各自真正的服务，并确保当前 OAuth/供应商凭据适用。README 中只指向
-`chatgpt.com` 的最小 Caddy 示例，仅足以说明 Codex relay 的网络边界，不会自动获得
-其他供应商的协议能力。Caddy 能反向代理 WebSocket，但仍须保留 Upgrade、子协议、
-流式正文与手动重定向语义。
+Messages、Gemini 与 Realtime sideband 不再要求 relay 理解这些供应商路径；relay 只需
+承载 ChatGPT Codex 原生请求。Worker 直连 sideband 时仍只发送保存的上游 OAuth 与必要
+协议头，不转发下游 API key、Cookie 或客户端账户头。若自行把 direct alias 放回 relay，
+Caddy 反向代理 WebSocket 时须保留 Upgrade、子协议、流式正文与手动重定向语义。
 
 ## Cloudflare 平台限制
 

@@ -1,6 +1,9 @@
 import { env, exports } from "cloudflare:workers";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { forwardCodexProxy } from "../../src/codex/proxy";
+import {
+	forwardCodexProxy,
+	resolveCodexProxyUrl,
+} from "../../src/codex/proxy";
 import { upstreamProxyResponse, withCors } from "../../src/http/response";
 import { isRecord } from "../../src/shared/json";
 import { fetchMock } from "../support/fetch-mock";
@@ -25,6 +28,29 @@ afterAll(() => {
 });
 
 describe("streaming compatibility proxy", () => {
+	it.each([
+		{
+			clientPath: "/v1/live/call_123?key=drop-me",
+			upstreamPath: "/v1/live/call_123",
+		},
+		{
+			clientPath: "/v1/realtime/calls/call_123?token=drop-me",
+			upstreamPath: "/v1/realtime/calls/call_123",
+		},
+		{
+			clientPath: "/v1/realtime?call_id=call_123&intent=override&key=drop-me",
+			upstreamPath: "/v1/realtime?intent=quicksilver&call_id=call_123",
+		},
+	])("routes Codex sideband directly to its dedicated origin: $clientPath", ({ clientPath, upstreamPath }) => {
+		expect(
+			resolveCodexProxyUrl(
+				"https://codex-relay.test/backend-api/codex/responses",
+				new URL(`https://worker.example${clientPath}`),
+				"GET",
+			).toString(),
+		).toBe(`https://api.openai.com${upstreamPath}`);
+	});
+
 	it("streams multipart image edits to the native Codex image endpoint", async () => {
 		let outboundHeaders: Headers | undefined;
 		let outboundForm: FormData | undefined;
@@ -109,30 +135,6 @@ describe("streaming compatibility proxy", () => {
 	});
 
 	it.each([
-		{
-			name: "Anthropic Messages transport",
-			method: "POST",
-			clientPath: "/v1/messages?beta=1",
-			upstreamPath: "/v1/messages?beta=1",
-		},
-		{
-			name: "video content download",
-			method: "GET",
-			clientPath: "/v1/videos/video_123/content",
-			upstreamPath: "/v1/videos/video_123/content",
-		},
-		{
-			name: "Gemini wildcard action",
-			method: "PATCH",
-			clientPath: "/v1beta/models/gemini:testAction?alt=sse",
-			upstreamPath: "/v1beta/models/gemini:testAction?alt=sse",
-		},
-		{
-			name: "OpenAI video alias",
-			method: "GET",
-			clientPath: "/openai/v1/videos/video_123/content",
-			upstreamPath: "/openai/v1/videos/video_123/content",
-		},
 		{
 			name: "Codex CLI direct alias",
 			method: "DELETE",
@@ -414,11 +416,17 @@ describe("streaming compatibility proxy", () => {
 	it("forwards a Realtime sideband WebSocket handshake without translating frames", async () => {
 		fetchMock
 			.intercept({
-				origin: "https://codex-relay.test",
+				origin: "https://api.openai.com",
 				path: "/v1/realtime?intent=quicksilver&call_id=call_123",
 				method: "GET",
 			})
 			.reply((call) => {
+				expect(call.headers.get("authorization")).toBe(
+					`Bearer ${TEST_OAUTH.accessToken}`,
+				);
+				expect(call.headers.get("chatgpt-account-id")).toBe(
+					TEST_OAUTH.accountId,
+				);
 				expect(call.headers.get("upgrade")).toBe("websocket");
 				expect(call.headers.get("sec-websocket-protocol")).toBe(
 					"openai-realtime-v1",
@@ -433,7 +441,7 @@ describe("streaming compatibility proxy", () => {
 			});
 
 		const response = await authenticatedFetch(
-			"https://example.com/v1/realtime?intent=quicksilver&call_id=call_123",
+			"https://example.com/v1/realtime?call_id=call_123&intent=override&key=drop-me",
 			{
 				method: "GET",
 				headers: {
@@ -485,9 +493,9 @@ describe("streaming compatibility proxy", () => {
 		expect(await response.text()).toBe("");
 	});
 
-	it("answers preflight for wildcard compatibility routes", async () => {
+	it("answers preflight for converted Gemini routes", async () => {
 		const response = await exports.default.fetch(
-			"https://example.com/v1/videos/video_123/content",
+			"https://example.com/v1beta/models/gpt-5.6-luna:streamGenerateContent",
 			{ method: "OPTIONS" },
 		);
 		expect(response.status).toBe(204);
@@ -497,6 +505,36 @@ describe("streaming compatibility proxy", () => {
 		expect(response.headers.get("access-control-allow-headers")).toContain(
 			"Anthropic-Version",
 		);
+	});
+
+	it.each([
+		"/v1/videos/video_123/content",
+		"/openai/v1/videos/video_123/content",
+		"/v1beta/interactions",
+		"/v1beta/models/gemini:testAction",
+		"/v1/realtime/unknown/path",
+	])("does not send unsupported vendor paths to the ChatGPT origin: %s", async (path) => {
+		const response = await authenticatedFetch(`https://example.com${path}`, {
+			method: "POST",
+			body: "{}",
+		});
+		expect(response.status).toBe(404);
+		expect(await response.text()).toBe("");
+	});
+
+	it("requires the documented methods and WebSocket upgrade for Realtime routes", async () => {
+		for (const [method, path] of [
+			["GET", "/v1/live"],
+			["POST", "/v1/live/call_123"],
+			["GET", "/v1/realtime"],
+			["GET", "/v1/realtime?call_id=bad%2Fid"],
+		] as const) {
+			const response = await authenticatedFetch(`https://example.com${path}`, {
+				method,
+			});
+			expect(response.status).toBe(404);
+			expect(await response.text()).toBe("");
+		}
 	});
 });
 

@@ -1,6 +1,11 @@
 import { authenticateClient } from "../auth/api-key";
 import { getCodexCredentials } from "../auth/credentials";
-import { isCodexProxyPath, isWebSocketUpgrade } from "../codex/proxy";
+import {
+	isCodexProxyPath,
+	isCodexProxyRequestAllowed,
+	isWebSocketUpgrade,
+} from "../codex/proxy";
+import { matchGeminiActionPath, matchGeminiModelPath } from "../gemini/path";
 import { emptyResponse, withCors } from "../http/response";
 import { hasErrorCode, logFailure } from "../shared/logging";
 import { handleAdminRoute, matchAdminRoute } from "./admin-handler";
@@ -37,6 +42,9 @@ function matchApiRoute(request: Request, pathname: string): ApiRoute | undefined
 	const route = matchApiPath(pathname);
 	if (!route) return undefined;
 	if (route === "models") return request.method === "GET" ? route : undefined;
+	if (route === "gemini_models" || route === "gemini_model") {
+		return request.method === "GET" ? route : undefined;
+	}
 	if (route === "responses") {
 		if (request.method === "POST") return route;
 		return request.method === "GET" && isWebSocketUpgrade(request)
@@ -44,9 +52,7 @@ function matchApiRoute(request: Request, pathname: string): ApiRoute | undefined
 			: undefined;
 	}
 	if (route === "proxy") {
-		return request.method !== "OPTIONS" && request.method !== "CONNECT"
-			? route
-			: undefined;
+		return isCodexProxyRequestAllowed(request, pathname) ? route : undefined;
 	}
 	return request.method === "POST" ? route : undefined;
 }
@@ -69,8 +75,23 @@ function matchApiPath(pathname: string): ApiRoute | undefined {
 			return "chat_completions";
 		case "/v1/completions":
 			return "completions";
-		default:
+		case "/v1/messages":
+		case "/v1/messages/":
+			return "messages";
+		case "/v1/messages/count_tokens":
+		case "/v1/messages/count_tokens/":
+			return "message_tokens";
+		case "/v1beta/models":
+		case "/v1beta/models/":
+			return "gemini_models";
+		default: {
+			const target = matchGeminiActionPath(pathname);
+			if (target?.action === "generateContent") return "gemini_generate";
+			if (target?.action === "streamGenerateContent") return "gemini_stream";
+			if (target?.action === "countTokens") return "gemini_tokens";
+			if (matchGeminiModelPath(pathname)) return "gemini_model";
 			return isCodexProxyPath(pathname) ? "proxy" : undefined;
+		}
 	}
 }
 

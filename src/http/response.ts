@@ -160,6 +160,13 @@ export function chatSseResponse(
 	body: ReadableStream<Uint8Array>,
 	source: Headers,
 ): Response {
+	return eventStreamResponse(body, source);
+}
+
+export function eventStreamResponse(
+	body: ReadableStream<Uint8Array>,
+	source: Headers,
+): Response {
 	return new Response(body, {
 		status: 200,
 		headers: sseHeaders(source),

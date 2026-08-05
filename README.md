@@ -11,7 +11,7 @@ OpenAI client → Cloudflare Worker → Caddy → ChatGPT Codex
                              └── API_KEYS    AES-256-GCM 信封
 ```
 
-源码按 `app / auth / codex / chat / completions / http / openai / shared` 分层。
+源码按 `app / auth / codex / chat / completions / messages / gemini / http / openai / shared` 分层。
 完整目录、依赖方向和请求流见[架构说明](docs/architecture.md)。
 
 ## 数据与密钥模型
@@ -74,12 +74,13 @@ https://your-worker.example.com/<ADMIN_PATH>/admin
 下列请求需要一个已启用的管理面板 API Key：
 
 - `GET /v1/models`；
-- 协议转换：`POST /v1/chat/completions`、`POST /v1/completions`；
+- 协议转换：`POST /v1/chat/completions`、`POST /v1/completions`、
+  `POST /v1/messages`、`POST /v1/messages/count_tokens`，以及 Gemini 风格的
+  `/v1beta/models*` 与三个标准 model action；
 - Codex 原生映射：`POST /v1/responses`、`POST /v1/responses/compact`、
   `GET /v1/responses` WebSocket、
   `/v1/images/*`、`POST /v1/alpha/search`；
-- HTTP/WebSocket 传输：`/v1/videos/*`、`/v1/messages*`、`/v1/live*`、
-  `/v1/realtime*`、`/v1beta/*`、`/openai/v1/videos/*`；
+- HTTP/WebSocket 传输：`/v1/live*`、`/v1/realtime*`；
 - Codex CLI 直连别名：`/backend-api/codex/*`。
 
 客户端可使用 `Authorization: Bearer sk-...`、`X-Api-Key: sk-...` 或
@@ -93,11 +94,21 @@ Responses 与 compact 只检查顶层 `input`，把消息项的 `system` 角色�
 其他字段保持不变；其他帧也直接转交。Chat 与旧版 Completions 根据 `stream`
 返回 JSON 或 SSE；其他透明路径继续支持 multipart、二进制、Range 和 WebSocket 流式
 传输，同时隔离 OAuth、Cookie、内部边界和 hop-by-hop header。
-路径级兼容边界见[兼容矩阵](docs/compatibility.md)。
+Anthropic Messages 使用其原生 JSON/SSE/error envelope；Gemini 支持 models 列表与详情、
+`generateContent`、`streamGenerateContent` 和 `countTokens`。这些请求都会转换成 Codex
+Responses 并只发往 `/backend-api/codex/responses`，不会把供应商路径拼到
+`chatgpt.com` 根目录。视频 API、`/v1beta/interactions` 和未知 Gemini action 没有可用的
+Codex OAuth 对应物，返回隐藏式 `404`。路径级兼容边界见
+[兼容矩阵](docs/compatibility.md)。
 
-需要转换或检查角色的 Chat、Completions、Responses 与 compact JSON 请求及 zstd
-解压结果最多 4 MiB。媒体、Messages、v1beta 和其他 Codex 别名路径不缓冲完整正文，
-不受这个应用层上限约束，但仍受 Cloudflare 套餐与 runtime 限制。
+需要转换或检查角色的 Chat、Completions、Messages、Gemini、Responses 与 compact JSON
+请求及 zstd 解压结果最多 4 MiB。图片、Realtime 和其他 Codex 原生别名路径不缓冲完整
+正文，不受这个应用层上限约束，但仍受 Cloudflare 套餐与 runtime 限制。
+
+Messages 与 Gemini 的 token-count 路径采用本地 `cl100k_base` tokenizer 对转换后的 Codex
+输入估算，不调用供应商 token-count 服务。它包含文本、工具 schema 和工具结果，但不会
+与 Anthropic/Gemini 自有 tokenizer 保证逐 token 相等；应把结果用于预检与预算估算，
+不能用于账单核对。
 
 ## 部署
 

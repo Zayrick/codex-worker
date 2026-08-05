@@ -6,6 +6,7 @@ import { adaptCompactRequest, adaptResponsesRequest } from "./request";
 import { bridgeResponsesWebSocket } from "./websocket";
 
 const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
+const REALTIME_SIDEBAND_ORIGIN = "https://api.openai.com";
 
 const BLOCKED_REQUEST_HEADERS = new Set([
 	"accept-encoding",
@@ -54,20 +55,33 @@ const requestAdapters = {
 export function isCodexProxyPath(pathname: string): boolean {
 	return (
 		isPathFamily(pathname, "/v1/images") ||
-		isPathFamily(pathname, "/v1/videos") ||
-		isPathFamily(pathname, "/v1/messages") ||
 		isPathFamily(pathname, "/v1/responses") ||
 		pathname === "/v1/alpha/search" ||
-		isPathFamily(pathname, "/v1/live") ||
-		isPathFamily(pathname, "/v1/realtime") ||
-		isPathFamily(pathname, "/v1beta") ||
-		isPathFamily(pathname, "/openai/v1/videos") ||
+		isLiveProxyPath(pathname) ||
+		isRealtimeProxyPath(pathname) ||
 		isPathFamily(pathname, "/backend-api/codex")
 	);
 }
 
 export function isWebSocketUpgrade(request: Request): boolean {
 	return request.headers.get("Upgrade")?.trim().toLowerCase() === "websocket";
+}
+
+export function isCodexProxyRequestAllowed(
+	request: Request,
+	pathname: string,
+): boolean {
+	if (pathname === "/v1/live" || pathname === "/v1/realtime/calls") {
+		return request.method === "POST";
+	}
+	if (isRealtimeSidebandPath(pathname)) {
+		if (request.method !== "GET" || !isWebSocketUpgrade(request)) return false;
+		if (pathname !== "/v1/realtime") return true;
+		return /^[A-Za-z0-9_-]{1,128}$/.test(
+			new URL(request.url).searchParams.get("call_id") ?? "",
+		);
+	}
+	return request.method !== "OPTIONS" && request.method !== "CONNECT";
 }
 
 export async function forwardCodexProxy(
@@ -120,6 +134,18 @@ export function resolveCodexProxyUrl(
 	clientUrl: URL,
 	method: string,
 ): URL {
+	if (method === "GET" && isRealtimeSidebandPath(clientUrl.pathname)) {
+		const sideband = new URL(REALTIME_SIDEBAND_ORIGIN);
+		sideband.pathname = clientUrl.pathname;
+		if (clientUrl.pathname === "/v1/realtime") {
+			sideband.searchParams.set("intent", "quicksilver");
+			sideband.searchParams.set(
+				"call_id",
+				clientUrl.searchParams.get("call_id") ?? "",
+			);
+		}
+		return sideband;
+	}
 	const target = resolveRelayUrl(relayUrl);
 	const codexRoot = target.pathname.replace(/\/responses\/?$/, "");
 	target.pathname = proxyPath(clientUrl.pathname, method, codexRoot);
@@ -208,4 +234,27 @@ function isPathFamily(pathname: string, root: string): boolean {
 
 function isCodexNativeTarget(pathname: string): boolean {
 	return /\/backend-api\/codex(?:\/|$)/.test(pathname);
+}
+
+function isRealtimeSidebandPath(pathname: string): boolean {
+	return (
+		pathname === "/v1/realtime" ||
+		/^\/v1\/live\/[A-Za-z0-9_-]{1,128}$/.test(pathname) ||
+		/^\/v1\/realtime\/calls\/[A-Za-z0-9_-]{1,128}$/.test(pathname)
+	);
+}
+
+function isLiveProxyPath(pathname: string): boolean {
+	return (
+		pathname === "/v1/live" ||
+		/^\/v1\/live\/[A-Za-z0-9_-]{1,128}$/.test(pathname)
+	);
+}
+
+function isRealtimeProxyPath(pathname: string): boolean {
+	return (
+		pathname === "/v1/realtime" ||
+		pathname === "/v1/realtime/calls" ||
+		/^\/v1\/realtime\/calls\/[A-Za-z0-9_-]{1,128}$/.test(pathname)
+	);
 }
