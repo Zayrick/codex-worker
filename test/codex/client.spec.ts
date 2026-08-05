@@ -146,6 +146,7 @@ describe("Codex upstream bridge", () => {
 		expect(outbound!.headers.has("session-id")).toBe(false);
 		expect(JSON.parse(outbound!.body)).toEqual({
 			...requestPayload,
+			store: false,
 			input: [
 				{ ...requestPayload.input[0], role: "developer" },
 				requestPayload.input[1],
@@ -237,7 +238,7 @@ describe("Codex upstream bridge", () => {
 		});
 	});
 
-	it("forwards zstd request bodies without decoding them", async () => {
+	it("forwards already non-storing zstd request bodies without decoding them", async () => {
 		const upstreamSse = sseResponse();
 		let outboundBody: Uint8Array | undefined;
 		let outboundHeaders: Headers | undefined;
@@ -265,6 +266,7 @@ describe("Codex upstream bridge", () => {
 				JSON.stringify({
 					model: "gpt-5.6-luna",
 					input: "compressed Codex request",
+					store: false,
 					prompt_cache_key: "compressed-cache-key",
 				}),
 			),
@@ -285,12 +287,20 @@ describe("Codex upstream bridge", () => {
 	});
 
 	it("returns a non-streaming Chat Completions response", async () => {
-		mockCodex(sseResponse());
+		mockCodex(sseResponse(), (body) => {
+			expect(body).toMatchObject({
+				instructions: "",
+				store: false,
+				stream: true,
+				include: ["reasoning.encrypted_content"],
+			});
+		});
 		const response = await authenticatedFetch("https://example.com/v1/chat/completions", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
 				model: "gpt-5.6-lunar",
+				store: true,
 				reasoning_effort: "low",
 				messages: [
 					{
@@ -473,15 +483,29 @@ describe("Codex upstream bridge", () => {
 	});
 });
 
-function mockCodex(body: string, status = 200, contentType = "text/event-stream"): void {
+function mockCodex(
+	body: string,
+	inspectRequest?: (body: unknown) => void,
+): void {
 	fetchMock
 		.intercept({
 			origin: "https://codex-relay.test",
 			path: "/backend-api/codex/responses",
 			method: "POST",
 		})
-		.reply(status, body, {
-			headers: { "Content-Type": contentType },
+		.reply(async (call) => {
+			if (inspectRequest) {
+				inspectRequest(
+					JSON.parse(await new Response(call.body).text()),
+				);
+			}
+			return {
+				statusCode: 200,
+				data: body,
+				responseOptions: {
+					headers: { "Content-Type": "text/event-stream" },
+				},
+			};
 		});
 }
 

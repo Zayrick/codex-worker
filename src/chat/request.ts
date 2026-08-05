@@ -24,11 +24,7 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 
 	const body: JsonObject = {
 		model,
-		instructions: "",
 		input: responseInput,
-		store: false,
-		stream: true,
-		include: ["reasoning.encrypted_content"],
 	};
 
 	if (tools.items.length > 0) {

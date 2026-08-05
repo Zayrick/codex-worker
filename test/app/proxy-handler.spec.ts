@@ -320,7 +320,7 @@ describe("streaming compatibility proxy", () => {
 				},
 			],
 			previous_response_id: "resp_previous",
-			store: false,
+			store: true,
 			unknown_extension: { keep: true },
 		};
 		const upstreamMessage = await exchangeWebSocketMessage(
@@ -330,6 +330,7 @@ describe("streaming compatibility proxy", () => {
 		);
 		expect(JSON.parse(String(upstreamMessage))).toEqual({
 			...wsRequest,
+			store: false,
 			input: [
 				{ ...wsRequest.input[0], role: "developer" },
 				wsRequest.input[1],

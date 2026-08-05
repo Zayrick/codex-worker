@@ -1,6 +1,7 @@
 import { getCodexCredentials } from "../auth/credentials";
 import { ApiError, isAbortError } from "../shared/api-error";
 import type { JsonObject } from "../shared/json";
+import { applyConvertedResponseEgressPolicy } from "./request-policy";
 
 const FORWARDED_CODEX_HEADERS = [
 	"Version",
@@ -35,7 +36,7 @@ export async function sendConvertedResponses(
 			options.headers,
 			true,
 		),
-		body: JSON.stringify(body),
+		body: JSON.stringify(applyConvertedResponseEgressPolicy(body)),
 		...(options.signal ? { signal: options.signal } : {}),
 	});
 }

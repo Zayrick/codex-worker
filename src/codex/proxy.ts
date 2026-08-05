@@ -2,7 +2,7 @@ import { getCodexCredentials } from "../auth/credentials";
 import { adaptLiveBootstrapRequest } from "../live/request";
 import { ApiError, isAbortError } from "../shared/api-error";
 import { resolveRelayUrl } from "./client";
-import { adaptResponsesRequest } from "./request";
+import { adaptCompactRequest, adaptResponsesRequest } from "./request";
 import { bridgeResponsesWebSocket } from "./websocket";
 
 const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
@@ -45,6 +45,12 @@ type CodexProxyEnv = Pick<
 
 export type CodexProxyRoute = "responses" | "compact" | "proxy";
 
+const requestAdapters = {
+	responses: adaptResponsesRequest,
+	compact: adaptCompactRequest,
+	proxy: adaptLiveBootstrapRequest,
+} satisfies Record<CodexProxyRoute, (request: Request) => Promise<Request>>;
+
 export function isCodexProxyPath(pathname: string): boolean {
 	return (
 		isPathFamily(pathname, "/v1/images") ||
@@ -71,10 +77,7 @@ export async function forwardCodexProxy(
 	route: CodexProxyRoute,
 ): Promise<Response> {
 	const credentials = await getCodexCredentials(env);
-	const outgoingRequest =
-		route === "proxy"
-			? await adaptLiveBootstrapRequest(request)
-			: await adaptResponsesRequest(request);
+	const outgoingRequest = await requestAdapters[route](request);
 	const target = resolveCodexProxyUrl(
 		env.CODEX_RELAY_URL,
 		clientUrl,

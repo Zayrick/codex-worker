@@ -7,6 +7,7 @@ describe("request adaptation", () => {
 	it("maps Chat Completions without aliases or invented optional values", () => {
 		const adapted = chatRequestToResponses({
 			model: "gpt-5.6-lunar",
+			store: true,
 			reasoning_effort: "low",
 			parallel_tool_calls: false,
 			max_completion_tokens: 32,
@@ -59,13 +60,13 @@ describe("request adaptation", () => {
 		expect(adapted.model).toBe("gpt-5.6-lunar");
 		expect(adapted.body).toMatchObject({
 			model: "gpt-5.6-lunar",
-			instructions: "",
 			reasoning: { effort: "low" },
-			store: false,
-			stream: true,
 			parallel_tool_calls: false,
-			include: ["reasoning.encrypted_content"],
 		});
+		expect(adapted.body).not.toHaveProperty("instructions");
+		expect(adapted.body).not.toHaveProperty("store");
+		expect(adapted.body).not.toHaveProperty("stream");
+		expect(adapted.body).not.toHaveProperty("include");
 		expect(adapted.body).not.toHaveProperty("tool_choice");
 		expect(adapted.body).not.toHaveProperty("service_tier");
 		expect(adapted.body).not.toHaveProperty("max_completion_tokens");
