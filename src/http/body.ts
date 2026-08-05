@@ -6,20 +6,26 @@ import type { JsonObject } from "../shared/json";
 export const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024;
 
 export async function parseJsonBody(request: Request): Promise<JsonObject> {
-	let value: unknown;
+	return (await parseJsonBodyWithSource(request)).body;
+}
+
+export async function parseJsonBodyWithSource(request: Request): Promise<{
+	body: JsonObject;
+	encodedBody: Uint8Array;
+}> {
 	try {
 		const encoded = await readLimitedBody(request, MAX_JSON_BODY_BYTES);
 		if (!encoded) throw invalidJson();
 		const decoded = hasZstdEncoding(request.headers)
 			? decompressZstd(encoded)
 			: encoded;
-		value = JSON.parse(new TextDecoder().decode(decoded));
+		const value: unknown = JSON.parse(new TextDecoder().decode(decoded));
+		return { body: requireRecord(value), encodedBody: encoded };
 	} catch (error) {
 		if (error instanceof BodySizeLimitError) throw requestTooLarge();
 		if (error instanceof ApiError) throw error;
 		throw invalidJson();
 	}
-	return requireRecord(value);
 }
 
 function hasZstdEncoding(headers: Headers): boolean {

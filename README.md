@@ -89,8 +89,8 @@ https://your-worker.example.com/<ADMIN_PATH>/admin
 
 Responses 与 compact 只检查顶层 `input`，把消息项的 `system` 角色改为 `developer`；
 工具调用、续接 ID、缓存字段、未知字段和上游响应不作协议清洗。Responses WebSocket
-识别客户端 `response.create` 与 `response.append` 文本帧，统一以 `response.create` 发往
-Codex 并执行同一角色改写；其他帧保持不变。Chat 与旧版 Completions 根据 `stream`
+识别客户端 `response.create` 与 `response.append` 文本帧并执行同一角色改写，事件类型和
+其他字段保持不变；其他帧也直接转交。Chat 与旧版 Completions 根据 `stream`
 返回 JSON 或 SSE；其他透明路径继续支持 multipart、二进制、Range 和 WebSocket 流式
 传输，同时隔离 OAuth、Cookie、内部边界和 hop-by-hop header。
 路径级兼容边界见[兼容矩阵](docs/compatibility.md)。

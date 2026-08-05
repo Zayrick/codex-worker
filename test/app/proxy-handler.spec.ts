@@ -248,6 +248,7 @@ describe("streaming compatibility proxy", () => {
 		const upstreamPair = new WebSocketPair();
 		const upstreamSocket = upstreamPair[0];
 		const upstreamPeer = upstreamPair[1];
+		upstreamPeer.binaryType = "arraybuffer";
 		upstreamPeer.accept();
 		let outboundHeaders: Headers | undefined;
 		vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
@@ -272,7 +273,12 @@ describe("streaming compatibility proxy", () => {
 			});
 		const response = withCors(
 			upstreamProxyResponse(
-				await forwardCodexProxy(request, new URL(request.url), env),
+				await forwardCodexProxy(
+					request,
+					new URL(request.url),
+					env,
+					"responses",
+				),
 			),
 			"*",
 		);
@@ -295,7 +301,8 @@ describe("streaming compatibility proxy", () => {
 		);
 		const downstream = response.webSocket;
 		expect(downstream).not.toBeNull();
-		downstream!.accept();
+		if (!downstream) throw new Error("Missing downstream WebSocket.");
+		downstream.accept();
 
 		const wsRequest = {
 			type: "response.create",
@@ -316,13 +323,12 @@ describe("streaming compatibility proxy", () => {
 			store: false,
 			unknown_extension: { keep: true },
 		};
-		const upstreamMessage = new Promise<string>((resolve) => {
-			upstreamPeer.addEventListener("message", (event) =>
-				resolve(String(event.data)),
-			);
-		});
-		downstream!.send(JSON.stringify(wsRequest));
-		expect(JSON.parse(await upstreamMessage)).toEqual({
+		const upstreamMessage = await exchangeWebSocketMessage(
+			downstream,
+			upstreamPeer,
+			JSON.stringify(wsRequest),
+		);
+		expect(JSON.parse(String(upstreamMessage))).toEqual({
 			...wsRequest,
 			input: [
 				{ ...wsRequest.input[0], role: "developer" },
@@ -347,15 +353,13 @@ describe("streaming compatibility proxy", () => {
 			previous_response_id: "resp_current",
 			unknown_extension: { keep: true },
 		};
-		const upstreamAppendMessage = new Promise<string>((resolve) => {
-			upstreamPeer.addEventListener("message", (event) =>
-				resolve(String(event.data)),
-			);
-		});
-		downstream!.send(JSON.stringify(appendRequest));
-		expect(JSON.parse(await upstreamAppendMessage)).toEqual({
+		const upstreamAppendMessage = await exchangeWebSocketMessage(
+			downstream,
+			upstreamPeer,
+			JSON.stringify(appendRequest),
+		);
+		expect(JSON.parse(String(upstreamAppendMessage))).toEqual({
 			...appendRequest,
-			type: "response.create",
 			input: [
 				{ ...appendRequest.input[0], role: "developer" },
 				appendRequest.input[1],
@@ -366,41 +370,44 @@ describe("streaming compatibility proxy", () => {
 			type: "response.append",
 			input: [],
 		});
-		const upstreamEmptyAppendMessage = new Promise<string>((resolve) => {
-			upstreamPeer.addEventListener("message", (event) =>
-				resolve(String(event.data)),
-			);
-		});
-		downstream!.send(emptyAppendRequest);
-		expect(JSON.parse(await upstreamEmptyAppendMessage)).toEqual({
-			type: "response.create",
-			input: [],
-		});
+		expect(
+			await exchangeWebSocketMessage(
+				downstream,
+				upstreamPeer,
+				emptyAppendRequest,
+			),
+		).toBe(emptyAppendRequest);
 
 		const otherRequest = JSON.stringify({
 			type: "session.update",
 			input: [{ type: "message", role: "system", content: "unchanged" }],
 		});
-		const upstreamOtherMessage = new Promise<string>((resolve) => {
-			upstreamPeer.addEventListener("message", (event) =>
-				resolve(String(event.data)),
-			);
-		});
-		downstream!.send(otherRequest);
-		expect(await upstreamOtherMessage).toBe(otherRequest);
+		expect(
+			await exchangeWebSocketMessage(downstream, upstreamPeer, otherRequest),
+		).toBe(otherRequest);
+
+		const binaryRequest = new Uint8Array([1, 2, 3, 4]).buffer;
+		const upstreamBinary = await exchangeWebSocketMessage(
+			downstream,
+			upstreamPeer,
+			binaryRequest,
+		);
+		expect(upstreamBinary).toBeInstanceOf(ArrayBuffer);
+		if (!(upstreamBinary instanceof ArrayBuffer)) {
+			throw new Error("Expected an ArrayBuffer WebSocket message.");
+		}
+		expect(new Uint8Array(upstreamBinary)).toEqual(
+			new Uint8Array(binaryRequest),
+		);
 
 		const responseEvent = JSON.stringify({
 			type: "response.completed",
 			response: { id: "resp_current" },
 		});
-		const downstreamMessage = new Promise<string>((resolve) => {
-			downstream!.addEventListener("message", (event) =>
-				resolve(String(event.data)),
-			);
-		});
-		upstreamPeer.send(responseEvent);
-		expect(await downstreamMessage).toBe(responseEvent);
-		downstream!.close(1000, "done");
+		expect(
+			await exchangeWebSocketMessage(upstreamPeer, downstream, responseEvent),
+		).toBe(responseEvent);
+		downstream.close(1000, "done");
 	});
 
 	it("forwards a Realtime sideband WebSocket handshake without translating frames", async () => {
@@ -491,3 +498,17 @@ describe("streaming compatibility proxy", () => {
 		);
 	});
 });
+
+async function exchangeWebSocketMessage(
+	sender: WebSocket,
+	receiver: WebSocket,
+	message: string | ArrayBuffer | ArrayBufferView,
+): Promise<unknown> {
+	const received = new Promise<unknown>((resolve) => {
+		receiver.addEventListener("message", (event) => resolve(event.data), {
+			once: true,
+		});
+	});
+	sender.send(message);
+	return received;
+}

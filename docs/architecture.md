@@ -125,7 +125,7 @@ fetch-handler
   → 路径族与方法匹配
   → API_KEYS 解密与启用 Key 鉴权
   → codex/proxy
-  → codex/request（顶层 input 的 system → developer；WS append → create）
+  → codex/request（HTTP/WS 顶层 input 的 system → developer）
   → 清理客户端/边界 header、写入 OAuth
   → relay（HTTP 响应流或双向 WebSocket 帧桥接）
 ```

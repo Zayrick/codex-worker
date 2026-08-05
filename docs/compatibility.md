@@ -21,7 +21,7 @@
 | `POST /v1/chat/completions` | 协议转换 | Chat 请求转换为 Responses；普通响应转换为 JSON，`stream: true` 转换为 Chat SSE。 |
 | `POST /v1/completions` | 协议转换 | 旧版 prompt 转为 Responses，并输出 `text_completion` JSON/SSE。当前只支持字符串或单项字符串数组、`n=1`、`best_of=1`；不伪造多候选、token-id prompt 或完整 logprobs 语义。 |
 | `POST /v1/responses`、`POST /v1/responses/compact` | Codex 原生映射 | 路径映射到 `/backend-api/codex/responses*`；只把顶层 `input` 数组中 `role: "system"` 的项改为 `developer`，其余正文字段、查询参数、上游状态、内容类型和响应流保持不变。 |
-| `GET /v1/responses` + `Upgrade: websocket` | Codex 原生映射 | 建立双向 WebSocket 桥；识别客户端 `response.create` 与 `response.append` 文本帧，统一以 `response.create` 发往 Codex，并执行同一顶层 `input` 角色改写。 |
+| `GET /v1/responses` + `Upgrade: websocket` | Codex 原生映射 | 建立双向 WebSocket 桥；识别客户端 `response.create` 与 `response.append` 文本帧并执行同一顶层 `input` 角色改写，事件类型和其他字段保持不变。 |
 | `/v1/images/generations`、`/v1/images/edits` | Codex 原生映射 | 映射到 `/backend-api/codex/images/*`。JSON、multipart 图片上传、SSE/JSON/二进制下载都按流处理；其他 `/v1/images/*` 动作是否存在由上游决定。 |
 | `/v1/videos/*` | 传输透传 | 方法、查询参数、正文和流式响应转交同源 relay。参考项目中的视频执行器是供应商专用实现；本 Worker 不把 Codex Responses 翻译成视频 API。 |
 | `/openai/v1/videos/*` | 传输透传 | 提供 OpenAI Videos 别名，包括创建、轮询和 `/content` 下载。 |
@@ -79,8 +79,8 @@ Messages、v1beta 和其他别名路径不受这个应用层 JSON 上限约束�
 `fetch()`，再用一对本地 socket 桥接上下游。Codex 请求帧的边界如下：
 
 - 客户端文本帧为有效的 `response.create` 或 `response.append` JSON 时视为 Responses
-  请求；两者统一以 `response.create` 发往 Codex，并将顶层 `input` 中的
-  `role: "system"` 改为 `developer`；
+  请求；Worker 保留事件类型及其他字段，只将顶层 `input` 中的 `role: "system"`
+  改为 `developer`；
 - 其他客户端文本帧、所有二进制帧和全部上游帧保持原内容；
 - close code、close reason 和协商出的 `Sec-WebSocket-Protocol` 在两端转交；
 - 上游拒绝握手时，其 HTTP 状态与正文经安全响应头过滤后返回；

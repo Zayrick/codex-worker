@@ -6,7 +6,10 @@ import { completionFromChat } from "../completions/response";
 import { createCompletionStream } from "../completions/stream";
 import { fetchCodexModels, sendConvertedResponses } from "../codex/client";
 import { decodeSseStream } from "../codex/event-stream";
-import { forwardCodexProxy } from "../codex/proxy";
+import {
+	forwardCodexProxy,
+	type CodexProxyRoute,
+} from "../codex/proxy";
 import { parseJsonBody } from "../http/body";
 import {
 	chatSseResponse,
@@ -23,11 +26,9 @@ import { logFailure } from "../shared/logging";
 
 export type ApiRoute =
 	| "models"
-	| "responses"
-	| "compact"
 	| "chat_completions"
 	| "completions"
-	| "proxy";
+	| CodexProxyRoute;
 
 export async function handleApiRoute(route: ApiRoute, request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
 	try {
@@ -48,7 +49,7 @@ async function dispatchApiRoute(route: ApiRoute, request: Request, url: URL, env
 		case "responses":
 		case "compact":
 		case "proxy":
-			return handleProxy(request, url, env);
+			return handleProxy(route, request, url, env);
 		case "chat_completions":
 			return handleChatCompletions(request, env, ctx);
 		case "completions":
@@ -113,11 +114,14 @@ async function handleCompletions(
 }
 
 async function handleProxy(
+	route: CodexProxyRoute,
 	request: Request,
 	url: URL,
 	env: Env,
 ): Promise<Response> {
-	return upstreamProxyResponse(await forwardCodexProxy(request, url, env));
+	return upstreamProxyResponse(
+		await forwardCodexProxy(request, url, env, route),
+	);
 }
 
 function requestOptions(request: Request): {
