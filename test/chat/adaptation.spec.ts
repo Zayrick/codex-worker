@@ -104,13 +104,13 @@ describe("request adaptation", () => {
 		});
 	});
 
-	it("does not invent an empty user message and applies request defaults", () => {
+	it("does not invent an empty user message or a reasoning effort", () => {
 		const adapted = chatRequestToResponses({
 			model: "gpt-5.6-luna",
 			messages: [],
 		});
 		expect(adapted.body.input).toEqual([]);
-		expect(adapted.body.reasoning).toEqual({ effort: "medium" });
+		expect(adapted.body).not.toHaveProperty("reasoning");
 		expect(adapted.body).not.toHaveProperty("parallel_tool_calls");
 	});
 

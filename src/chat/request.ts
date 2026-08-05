@@ -28,7 +28,6 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 		input: responseInput,
 		store: false,
 		stream: true,
-		reasoning: { effort: "medium" },
 		include: ["reasoning.encrypted_content"],
 	};
 
