@@ -328,6 +328,11 @@ describe("streaming compatibility proxy", () => {
 			maxOutputTokens: 3,
 			max_tokens: 4,
 			context_management: [{ type: "compaction" }],
+			temperature: 0.2,
+			top_p: 0.9,
+			truncation: "auto",
+			user: "request-owner",
+			service_tier: "flex",
 			unknown_extension: { keep: true },
 		};
 		const upstreamMessage = await exchangeWebSocketMessage(
@@ -342,6 +347,11 @@ describe("streaming compatibility proxy", () => {
 			"maxOutputTokens",
 			"max_tokens",
 			"context_management",
+			"temperature",
+			"top_p",
+			"truncation",
+			"user",
+			"service_tier",
 		]) {
 			delete expectedWsRequest[field];
 		}

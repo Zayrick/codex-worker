@@ -90,7 +90,8 @@ https://your-worker.example.com/<ADMIN_PATH>/admin
 
 Responses 与 compact 会检查顶层 `input`，把消息项的 `system` 角色改为 `developer`。
 Responses 创建请求还会固定 `store: false`，并移除 Codex 不支持的 `max_completion_tokens`、
-`max_output_tokens`、`maxOutputTokens`、`max_tokens` 与 `context_management`；其他未知字段保留。
+`max_output_tokens`、`maxOutputTokens`、`max_tokens`、`context_management`、`temperature`、
+`top_p`、`truncation` 与 `user`；`service_tier` 仅在值为 `priority` 时保留，其他未知字段保留。
 Responses WebSocket 对 `response.create` 应用同一策略，`response.append` 只改写角色，其他帧
 直接转交。Chat 与旧版 Completions 根据 `stream`
 返回 JSON 或 SSE；其他透明路径继续支持 multipart、二进制、Range 和 WebSocket 流式

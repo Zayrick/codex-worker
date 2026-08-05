@@ -6,14 +6,19 @@ import {
 	defineRequestBodyPolicy,
 	overrideRequestFields,
 	removeRequestFields,
+	removeRequestFieldsUnlessAllowed,
 } from "../../src/codex/request-policy";
 
-const UNSUPPORTED_RESPONSE_FIELDS = [
+const REMOVED_RESPONSE_FIELDS = [
 	"max_completion_tokens",
 	"max_output_tokens",
 	"maxOutputTokens",
 	"max_tokens",
 	"context_management",
+	"temperature",
+	"top_p",
+	"truncation",
+	"user",
 ] as const;
 
 describe("Codex request body policies", () => {
@@ -64,9 +69,9 @@ describe("Codex request body policies", () => {
 		expect(applyResponseCreateEgressPolicy({})).toEqual({ store: false });
 	});
 
-	it("removes every unsupported token-limit alias and context management field", () => {
+	it("removes every unsupported Responses field", () => {
 		const body = Object.fromEntries([
-			...UNSUPPORTED_RESPONSE_FIELDS.map((key, index) => [key, index + 1]),
+			...REMOVED_RESPONSE_FIELDS.map((key, index) => [key, index + 1]),
 			["model", "gpt-5.6-luna"],
 			["unknown_extension", { keep: true }],
 		]);
@@ -76,13 +81,44 @@ describe("Codex request body policies", () => {
 			unknown_extension: { keep: true },
 			store: false,
 		});
-		for (const field of UNSUPPORTED_RESPONSE_FIELDS) {
+		for (const field of REMOVED_RESPONSE_FIELDS) {
 			expect(body).toHaveProperty(field);
 		}
 	});
 
+	it("keeps only supported service tier values", () => {
+		const priorityBody = {
+			model: "gpt-5.6-luna",
+			store: false,
+			service_tier: "priority",
+		};
+
+		expect(applyResponseCreateEgressPolicy(priorityBody)).toBe(priorityBody);
+		expect(
+			applyResponseCreateEgressPolicy({
+				model: "gpt-5.6-luna",
+				store: false,
+				service_tier: "flex",
+			}),
+		).toEqual({ model: "gpt-5.6-luna", store: false });
+	});
+
+	it("removes configured fields only when their value is not allowed", () => {
+		const applyPolicy = removeRequestFieldsUnlessAllowed({
+			mode: ["supported", null],
+		});
+
+		const supported = { mode: "supported", future_parameter: true };
+		expect(applyPolicy(supported)).toBe(supported);
+		expect(applyPolicy({ mode: null })).toEqual({ mode: null });
+		expect(applyPolicy({ mode: "legacy", future_parameter: true })).toEqual({
+			future_parameter: true,
+		});
+	});
+
 	it("builds new policies from data without changing the policy engine", () => {
 		const applyPolicy = defineRequestBodyPolicy({
+			allowedValues: { mode: ["supported"] },
 			remove: ["retired_parameter"],
 			override: { required_parameter: "upstream-value" },
 		});
@@ -91,6 +127,7 @@ describe("Codex request body policies", () => {
 			applyPolicy({
 				retired_parameter: true,
 				required_parameter: "downstream-value",
+				mode: "legacy",
 				future_parameter: "preserved",
 			}),
 		).toEqual({

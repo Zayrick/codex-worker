@@ -83,6 +83,10 @@ describe("Codex upstream bridge", () => {
 			context_management: [
 				{ type: "compaction", compact_threshold: 12_000 },
 			],
+			temperature: 0.2,
+			top_p: 0.9,
+			truncation: "auto",
+			user: "request-owner",
 			unknown_extension: { keep: true },
 		};
 		const requestBody = JSON.stringify(requestPayload, null, 2);
@@ -158,6 +162,11 @@ describe("Codex upstream bridge", () => {
 			"maxOutputTokens",
 			"max_tokens",
 			"context_management",
+			"temperature",
+			"top_p",
+			"truncation",
+			"user",
+			"service_tier",
 		]) {
 			delete expectedPayload[field];
 		}

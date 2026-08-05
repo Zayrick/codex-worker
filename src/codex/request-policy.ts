@@ -3,6 +3,7 @@ import type { JsonObject } from "../shared/json";
 export type RequestBodyPolicy = (body: JsonObject) => JsonObject;
 
 export interface RequestBodyPolicyDefinition {
+	readonly allowedValues?: Readonly<Record<string, readonly unknown[]>>;
 	readonly remove?: readonly string[];
 	readonly override?: Readonly<JsonObject>;
 }
@@ -14,7 +15,14 @@ const responseCreateEgressPolicy = {
 		"maxOutputTokens",
 		"max_tokens",
 		"context_management",
+		"temperature",
+		"top_p",
+		"truncation",
+		"user",
 	],
+	allowedValues: {
+		service_tier: ["priority"],
+	},
 	override: {
 		store: false,
 	},
@@ -41,6 +49,7 @@ export function defineRequestBodyPolicy(
 ): RequestBodyPolicy {
 	return composeRequestBodyPolicies(
 		removeRequestFields(...(definition.remove ?? [])),
+		removeRequestFieldsUnlessAllowed(definition.allowedValues ?? {}),
 		overrideRequestFields(definition.override ?? {}),
 	);
 }
@@ -76,5 +85,27 @@ export function removeRequestFields(...keys: string[]): RequestBodyPolicy {
 		const adapted = { ...body };
 		for (const key of removedKeys) delete adapted[key];
 		return adapted;
+	};
+}
+
+export function removeRequestFieldsUnlessAllowed(
+	allowedValuesByField: Readonly<Record<string, readonly unknown[]>>,
+): RequestBodyPolicy {
+	const entries = Object.entries(allowedValuesByField).map(
+		([key, allowedValues]) => [key, [...allowedValues]] as const,
+	);
+	return (body) => {
+		let adapted: JsonObject | undefined;
+		for (const [key, allowedValues] of entries) {
+			if (
+				!Object.hasOwn(body, key) ||
+				allowedValues.some((value) => Object.is(body[key], value))
+			) {
+				continue;
+			}
+			adapted ??= { ...body };
+			delete adapted[key];
+		}
+		return adapted ?? body;
 	};
 }
