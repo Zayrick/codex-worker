@@ -4,14 +4,12 @@ import { createChatCompletionStream } from "../chat/stream";
 import { completionRequestToResponses } from "../completions/request";
 import { completionFromChat } from "../completions/response";
 import { createCompletionStream } from "../completions/stream";
-import { fetchCodexModels, sendPreparedCompact, sendPreparedResponses } from "../codex/client";
+import { fetchCodexModels, sendConvertedResponses } from "../codex/client";
 import { decodeSseStream } from "../codex/event-stream";
 import { forwardCodexProxy } from "../codex/proxy";
-import { prepareCompactRequest, prepareResponsesRequest } from "../codex/request-policy";
 import { parseJsonBody } from "../http/body";
 import {
 	chatSseResponse,
-	codexSseResponse,
 	emptyResponse,
 	jsonResponse,
 	upstreamErrorResponse,
@@ -48,15 +46,13 @@ async function dispatchApiRoute(route: ApiRoute, request: Request, url: URL, env
 		case "models":
 			return handleModels(request, url, env);
 		case "responses":
-			return handleResponses(request, env);
 		case "compact":
-			return handleCompact(request, env);
+		case "proxy":
+			return handleProxy(request, url, env);
 		case "chat_completions":
 			return handleChatCompletions(request, env, ctx);
 		case "completions":
 			return handleCompletions(request, env, ctx);
-		case "proxy":
-			return handleProxy(request, url, env);
 	}
 }
 
@@ -67,21 +63,9 @@ async function handleModels(request: Request, url: URL, env: Env): Promise<Respo
 	return codexClient ? upstreamJsonResponse(upstream) : jsonResponse(await toOpenAiModelList(upstream));
 }
 
-async function handleResponses(request: Request, env: Env): Promise<Response> {
-	const input = await parseJsonBody(request);
-	const upstream = await sendPreparedResponses(prepareResponsesRequest(input), env, requestOptions(request));
-	return upstream.ok ? codexSseResponse(upstream) : upstreamErrorResponse(upstream);
-}
-
-async function handleCompact(request: Request, env: Env): Promise<Response> {
-	const input = await parseJsonBody(request);
-	const upstream = await sendPreparedCompact(prepareCompactRequest(input), env, requestOptions(request));
-	return upstream.ok ? upstreamJsonResponse(upstream) : upstreamErrorResponse(upstream);
-}
-
 async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 	const adapted = chatRequestToResponses(await parseJsonBody(request));
-	const upstream = await sendPreparedResponses(adapted.body, env, requestOptions(request));
+	const upstream = await sendConvertedResponses(adapted.body, env, requestOptions(request));
 	if (!upstream.ok) return upstreamErrorResponse(upstream);
 	const body = requireBody(upstream);
 	if (adapted.stream) {
@@ -102,7 +86,7 @@ async function handleCompletions(
 	const adapted = completionRequestToResponses(
 		await parseJsonBody(request),
 	);
-	const upstream = await sendPreparedResponses(
+	const upstream = await sendConvertedResponses(
 		adapted.body,
 		env,
 		requestOptions(request),

@@ -21,8 +21,7 @@ src/
 │   ├── envelope.ts
 │   ├── oauth-provider.ts
 │   └── refresh.ts
-├── codex/                   Codex 请求策略与网络客户端
-│   ├── request-policy.ts
+├── codex/                   Codex 网络客户端与透明代理
 │   ├── client.ts
 │   ├── proxy.ts
 │   ├── event-stream.ts
@@ -89,7 +88,7 @@ test/
 
 ```text
 index → app → auth / chat / completions / live / codex / http / openai → shared
-chat → codex event-stream / request-policy
+chat → codex event-stream
 chat → http SSE encoder
 completions → chat / http SSE encoder
 codex proxy → live request adapter
@@ -99,7 +98,7 @@ http admin-page → http response
 
 - `index.ts` 只组合 Workers handlers，不放业务规则。
 - `app/` 决定“何时调用什么”，不实现加密、协议转换或上游网络细节。
-- `request-policy.ts` 和 Chat 适配器负责纯数据转换；`client.ts`、OAuth provider、
+- Chat 与 Completions 适配器负责纯数据转换；`client.ts`、`proxy.ts`、OAuth provider、
   KV credentials 负责 I/O。
 - 功能模块直接引用 canonical 文件，不通过顶层 barrel 隐藏依赖。
 - `shared/` 只收纳至少被两个能力复用、且不含领域策略的原语。
@@ -107,19 +106,19 @@ http admin-page → http response
 
 ## 关键请求流
 
-OpenAI API 请求：
+需要协议转换的 Chat 与 Completions 请求：
 
 ```text
 fetch-handler
   → 精确路由匹配
   → API_KEYS 解密与启用 Key 鉴权
   → api-handler
-  → 有界 JSON 解码 / 请求策略转换
+  → 有界 JSON 解码 / 协议转换
   → Codex client
   → OpenAI JSON、Responses SSE 或 Chat SSE 表示
 ```
 
-透明 HTTP/WebSocket 请求：
+Responses、compact 与其他透明 HTTP/WebSocket 请求：
 
 ```text
 fetch-handler
@@ -127,7 +126,7 @@ fetch-handler
   → API_KEYS 解密与启用 Key 鉴权
   → codex/proxy
   → 清理客户端/边界 header、写入 OAuth
-  → relay（流式正文或 Response.webSocket 直接交接）
+  → relay（请求正文流、响应正文流或 Response.webSocket 直接交接）
 ```
 
 管理面板与 OAuth 设备登录：
@@ -156,8 +155,9 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
 - Worker 生成的错误使用统一 OpenAI error envelope；已鉴权请求的上游错误保持状态与
   正文。结构化 API 使用最小响应头 allowlist；透明代理使用 denylist 删除 cookie、
   hop-by-hop、Cloudflare 和内部服务 header，同时保留媒体/范围/WebSocket 所需 header。
-- 需要解析的 JSON 请求编码体与 zstd 解码结果均限制为 4 MiB；OAuth 和模型目录使用
-  更小的专用上限。透明代理只流式转交正文，不套用 4 MiB JSON 上限。
+- Chat 与 Completions 的 JSON 请求编码体及 zstd 解码结果限制为 4 MiB；OAuth 和模型
+  目录使用更小的专用上限。Responses、compact 与其他透明代理路径只流式转交正文，
+  不套用 4 MiB JSON 上限。
 - OAuth credentials、API_KEYS、设备 state 与管理会话分别使用独立 AES-GCM purpose
   string。`DATA_ENCRYPTION_KEY` 只负责加密；`ADMIN_SECRET` 只在登录表单 POST body 中
   传输。长期 secret 不得进入 URL；`ADMIN_PATH` 只是额外隐藏层，不能替代管理密钥。

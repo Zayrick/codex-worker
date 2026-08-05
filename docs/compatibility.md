@@ -19,8 +19,7 @@
 | `GET /v1/models` | 协议转换 | 读取 Codex 模型目录并输出 OpenAI model list；带 `client_version` 查询参数时保留 Codex CLI 目录格式。 |
 | `POST /v1/chat/completions` | 协议转换 | Chat 请求转换为 Responses；普通响应转换为 JSON，`stream: true` 转换为 Chat SSE。 |
 | `POST /v1/completions` | 协议转换 | 旧版 prompt 转为 Responses，并输出 `text_completion` JSON/SSE。当前只支持字符串或单项字符串数组、`n=1`、`best_of=1`；不伪造多候选、token-id prompt 或完整 logprobs 语义。 |
-| `POST /v1/responses` | Codex 原生适配 | 应用 Codex 请求策略并返回原生 SSE。 |
-| `POST /v1/responses/compact` | Codex 原生适配 | 映射到 Codex compact，并返回上游 JSON。 |
+| `POST /v1/responses`、`POST /v1/responses/compact` | Codex 原生映射 | 路径映射到 `/backend-api/codex/responses*`；查询参数、正文流、上游状态、内容类型和响应流按透明代理传输。 |
 | `GET /v1/responses` + `Upgrade: websocket` | Codex 原生映射 | 将 Responses WebSocket 握手和后续帧直接交给上游；不做帧级协议转换。 |
 | `/v1/images/generations`、`/v1/images/edits` | Codex 原生映射 | 映射到 `/backend-api/codex/images/*`。JSON、multipart 图片上传、SSE/JSON/二进制下载都按流处理；其他 `/v1/images/*` 动作是否存在由上游决定。 |
 | `/v1/videos/*` | 传输透传 | 方法、查询参数、正文和流式响应转交同源 relay。参考项目中的视频执行器是供应商专用实现；本 Worker 不把 Codex Responses 翻译成视频 API。 |
@@ -32,11 +31,15 @@
 | `POST /v1/realtime/calls` | Codex 原生映射 | 与 `/v1/live` 使用同一 bootstrap 映射、multipart 适配和默认查询参数。 |
 | `/v1/realtime`、`/v1/realtime/*` | 传输透传 | 支持普通 HTTP 与 WebSocket Upgrade；Worker 不转换 Realtime 事件。 |
 | `/v1beta/*` | 传输透传 | 覆盖 Gemini 风格 models、interactions 及其 action 路径；协议和 OAuth 语义由 relay 实现。 |
-| `/backend-api/codex/*` | Codex CLI 直连别名 | 原样传输路径与查询参数。`responses`、`responses/compact` 使用本项目的请求策略；其他子路径透明传输。 |
+| `/backend-api/codex/*` | Codex CLI 直连别名 | 原样传输路径、查询参数和正文流。 |
 
 这张表表示 Worker 能做什么，不表示单一 ChatGPT OAuth 对所有供应商 API 都有权限。
 尤其是 `/v1/videos/*`、`/v1/messages*` 和 `/v1beta/*`：路由存在且传输兼容，但若
 relay 只反代 `chatgpt.com`，上游仍可能返回 `401`、`404` 或协议错误。
+
+Responses 路径按字节流转发请求正文。Worker 不解析或校验 JSON，不补充正文默认值，
+也不根据 `prompt_cache_key` 等正文字段推导请求头；字段和编码是否有效由 relay/上游
+判定。`Content-Encoding: zstd` 等编码正文保持编码状态传输。
 
 旧版 Completions 当前实际解释 `model`、`prompt`、`stream`、`echo`、`n`、`best_of`，
 并传递 metadata、prompt cache、reasoning、service tier 和 stream usage 选项。
@@ -44,12 +47,12 @@ relay 只反代 `chatgpt.com`，上游仍可能返回 `401`、`404` 或协议错
 `user` 与 logprobs 不会传入 Codex；输出中的 `logprobs` 为 `null`。依赖这些采样或
 token 级语义的调用方不应把该路径视为完全等价的传统模型后端。
 
-## 图片与其他非 JSON 请求
+## 透明正文传输
 
 除 Live/Realtime bootstrap 的 multipart `sdp + session` 适配外，透明路由不会调用
-`request.json()`、`formData()` 或 `arrayBuffer()`。图片、视频或音频正文直接作为
-`ReadableStream` 交给 relay，因此不会把这些媒体完整放进 Worker 的 128 MB isolate
-内存。以下信息会保留：
+`request.json()`、`formData()` 或 `arrayBuffer()`。Responses JSON、压缩正文以及
+图片、视频或音频正文直接作为 `ReadableStream` 交给 relay，因此不会把完整正文放进
+Worker 的 isolate 内存。以下信息会保留：
 
 - HTTP 方法、查询参数、`Content-Type`、multipart boundary、`Range`、幂等键和
   协议版本头；
@@ -63,10 +66,9 @@ Origin/Referer、客户端提交的 ChatGPT 账户 ID、转发/IP、hop-by-hop �
 Cloudflare 内部头和 hop-by-hop 头，并强制 `Cache-Control: no-store`。
 重定向使用 `manual`，避免 OAuth 在未知重定向目标上自动重放。
 
-Live multipart 适配的正文上限为 16 MiB。需要解析并转换的 Chat、Completions、
-Responses 和 compact JSON 受项目自身 4 MiB 编码体/解压体上限约束；
-透明图片、视频、Messages、v1beta 和别名路径不受这个
-应用层 JSON 上限约束，但仍受 Cloudflare 请求体与资源限制。
+Live multipart 适配的正文上限为 16 MiB。需要解析并转换的 Chat 与 Completions JSON
+受项目自身 4 MiB 编码体/解压体上限约束；Responses、compact、图片、视频、Messages、
+v1beta 和别名路径不受这个应用层 JSON 上限约束，但仍受 Cloudflare 请求体与资源限制。
 
 ## WebSocket 行为
 

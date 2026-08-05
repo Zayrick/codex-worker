@@ -75,7 +75,7 @@ https://your-worker.example.com/<ADMIN_PATH>/admin
 
 - `GET /v1/models`；
 - 协议转换：`POST /v1/chat/completions`、`POST /v1/completions`；
-- Codex 原生：`POST /v1/responses`、`POST /v1/responses/compact`、
+- Codex 原生映射：`POST /v1/responses`、`POST /v1/responses/compact`、
   `/v1/images/*`、`POST /v1/alpha/search`；
 - HTTP/WebSocket 传输：`/v1/videos/*`、`/v1/messages*`、`/v1/live*`、
   `/v1/realtime*`、`/v1beta/*`、`/openai/v1/videos/*`；
@@ -86,14 +86,14 @@ https://your-worker.example.com/<ADMIN_PATH>/admin
 `X-Goog-Api-Key` 的顺序选择，不会在首选值失败后回退。缺少、错误或已停用的 Key
 均返回空正文 `404`。
 
-Responses 直接返回 Codex SSE；Chat 与旧版 Completions 根据 `stream` 返回 JSON 或
-SSE。已鉴权请求的上游错误状态与正文保持透传。透明路径支持 multipart、二进制、
-Range 和 WebSocket，同时过滤 OAuth、Cookie、内部边界和 hop-by-hop header。
+Responses 与 compact 的请求正文和上游响应按流传输；Chat 与旧版 Completions 根据
+`stream` 返回 JSON 或 SSE。透明路径支持 JSON、压缩正文、multipart、二进制、Range
+和 WebSocket，同时隔离 OAuth、Cookie、内部边界和 hop-by-hop header。
 路径级兼容边界见[兼容矩阵](docs/compatibility.md)。
 
-需要解析的 JSON 请求及 zstd 解压结果最多 4 MiB。透明媒体、Messages、v1beta 和
-Codex 别名路径不缓冲完整正文，不受这个应用层上限约束，但仍受 Cloudflare 套餐与
-runtime 限制。
+需要转换的 Chat 与 Completions JSON 请求及 zstd 解压结果最多 4 MiB。Responses、
+compact、媒体、Messages、v1beta 和 Codex 别名路径不缓冲完整正文，不受这个应用层
+上限约束，但仍受 Cloudflare 套餐与 runtime 限制。
 
 ## 部署
 

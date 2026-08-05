@@ -1,6 +1,6 @@
 import { getCodexCredentials } from "../auth/credentials";
 import { ApiError, isAbortError } from "../shared/api-error";
-import { stringField, type JsonObject } from "../shared/json";
+import type { JsonObject } from "../shared/json";
 
 const FORWARDED_CODEX_HEADERS = [
 	"Version",
@@ -21,20 +21,23 @@ interface CodexRequestOptions {
 	signal?: AbortSignal;
 }
 
-export function sendPreparedResponses(
+export async function sendConvertedResponses(
 	body: JsonObject,
 	env: CodexEnv,
 	options: CodexRequestOptions = {},
 ): Promise<Response> {
-	return sendCodexJson("responses", body, env, options);
-}
-
-export function sendPreparedCompact(
-	body: JsonObject,
-	env: CodexEnv,
-	options: CodexRequestOptions = {},
-): Promise<Response> {
-	return sendCodexJson("compact", body, env, options);
+	const credentials = await getCodexCredentials(env);
+	return fetchCodex(resolveRelayUrl(env.CODEX_RELAY_URL), {
+		method: "POST",
+		headers: codexHeaders(
+			credentials,
+			"text/event-stream",
+			options.headers,
+			true,
+		),
+		body: JSON.stringify(body),
+		...(options.signal ? { signal: options.signal } : {}),
+	});
 }
 
 export async function fetchCodexModels(
@@ -58,37 +61,11 @@ export async function fetchCodexModels(
 	);
 }
 
-async function sendCodexJson(
-	endpoint: "responses" | "compact",
-	body: JsonObject,
-	env: CodexEnv,
-	options: CodexRequestOptions,
-): Promise<Response> {
-	const credentials = await getCodexCredentials(env);
-	const url =
-		endpoint === "responses"
-			? resolveRelayUrl(env.CODEX_RELAY_URL)
-			: resolveCompactUrl(env.CODEX_RELAY_URL);
-	return fetchCodex(url, {
-		method: "POST",
-		headers: codexHeaders(
-			credentials,
-			endpoint === "responses" ? "text/event-stream" : "application/json",
-			options.headers,
-			true,
-			stringField(body, "prompt_cache_key"),
-		),
-		body: JSON.stringify(body),
-		...(options.signal ? { signal: options.signal } : {}),
-	});
-}
-
 function codexHeaders(
 	credentials: { token: string; accountId?: string },
 	accept: string,
 	source: Headers | undefined,
 	hasJsonBody: boolean,
-	promptCacheKey?: string,
 ): Headers {
 	const headers = new Headers({
 		Accept: accept,
@@ -98,7 +75,6 @@ function codexHeaders(
 	if (credentials.accountId) {
 		headers.set("Chatgpt-Account-Id", credentials.accountId);
 	}
-	if (promptCacheKey) headers.set("Session-Id", promptCacheKey);
 	for (const name of FORWARDED_CODEX_HEADERS) {
 		const value = source?.get(name)?.trim();
 		if (value) headers.set(name, value);
@@ -159,12 +135,6 @@ export function resolveRelayUrl(relayUrl: string): URL {
 			"invalid_relay_path",
 		);
 	}
-	return url;
-}
-
-function resolveCompactUrl(relayUrl: string): URL {
-	const url = resolveRelayUrl(relayUrl);
-	url.pathname = url.pathname.replace(/\/responses\/?$/, "/responses/compact");
 	return url;
 }
 

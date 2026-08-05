@@ -1,9 +1,6 @@
 import { authenticateClient } from "../auth/api-key";
 import { getCodexCredentials } from "../auth/credentials";
-import {
-	isCodexProxyPath,
-	isWebSocketUpgrade,
-} from "../codex/proxy";
+import { isCodexProxyPath, isWebSocketUpgrade } from "../codex/proxy";
 import { emptyResponse, withCors } from "../http/response";
 import { hasErrorCode, logFailure } from "../shared/logging";
 import { handleAdminRoute, matchAdminRoute } from "./admin-handler";
@@ -43,7 +40,7 @@ function matchApiRoute(request: Request, pathname: string): ApiRoute | undefined
 	if (route === "responses") {
 		if (request.method === "POST") return route;
 		return request.method === "GET" && isWebSocketUpgrade(request)
-			? "proxy"
+			? route
 			: undefined;
 	}
 	if (route === "proxy") {

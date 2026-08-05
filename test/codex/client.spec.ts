@@ -1,6 +1,5 @@
 import { zstdCompressSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { MAX_JSON_BODY_BYTES } from "../../src/http/body";
 import { fetchMock } from "../support/fetch-mock";
 import { authenticatedFetch, CREATED_AT, seedWorkerAuth, TEST_OAUTH } from "../support/worker-fixture";
 
@@ -49,23 +48,38 @@ afterAll(() => {
 });
 
 describe("Codex upstream bridge", () => {
-	it("uses only required auth headers and sends a sanitized request body", async () => {
+	it("forwards Responses body bytes without parsing or rewriting them", async () => {
 		let outbound:
 			| {
 					headers: Headers;
-					body: Record<string, unknown>;
+					body: string;
 			  }
 			| undefined;
+		const requestBody = [
+			"{",
+			'  "model": "gpt-5.6-lunar",',
+			'  "input": [{"type":"function_call_output","call_id":"call_previous","output":"tool result"}],',
+			'  "previous_response_id": "resp_previous",',
+			'  "store": true,',
+			'  "stream": false,',
+			'  "tools": [{"type":"function","name":"lookup"}],',
+			'  "parallel_tool_calls": true,',
+			'  "include": ["file_search_call.results"],',
+			'  "service_tier": "flex",',
+			'  "unknown_extension": {"keep":true}',
+			"}",
+			"",
+		].join("\n");
 		fetchMock
 			.intercept({
 				origin: "https://codex-relay.test",
 				path: "/backend-api/codex/responses",
 				method: "POST",
 			})
-			.reply((options) => {
+			.reply(async (options) => {
 				outbound = {
 					headers: new Headers(options.headers as HeadersInit),
-					body: JSON.parse(String(options.body)) as Record<string, unknown>,
+					body: await new Response(options.body).text(),
 				};
 				return {
 					statusCode: 200,
@@ -79,6 +93,7 @@ describe("Codex upstream bridge", () => {
 		const response = await authenticatedFetch("https://example.com/v1/responses", {
 			method: "POST",
 			headers: {
+				Accept: "application/vnd.openai.responses+json",
 				"Content-Type": "application/json",
 				Version: "0.144.1",
 				"X-Codex-Beta-Features": "beta-a",
@@ -91,114 +106,43 @@ describe("Codex upstream bridge", () => {
 				Originator: "client-originator",
 				"User-Agent": "client-user-agent",
 			},
-			body: JSON.stringify({
-				model: "gpt-5.6-lunar",
-				input: "Verify the clean request.",
-				custom_passthrough: { keep: true },
-				max_completion_tokens: 32,
-				max_output_tokens: 64,
-				temperature: 0.5,
-				top_p: 0.8,
-				truncation: "auto",
-				user: "user-1",
-				context_management: { type: "compaction" },
-				previous_response_id: "resp_previous",
-				generate: true,
-				prompt_cache_key: "cache-key",
-				prompt_cache_retention: "24h",
-				safety_identifier: "safety-id",
-				stream_options: { include_usage: true },
-				session_id: "body-session",
-				conversation_id: "body-conversation",
-			}),
+			body: requestBody,
 		});
 		expect(response.status).toBe(200);
+		expect(response.headers.get("content-type")).toContain("text/event-stream");
+		expect(await response.text()).toBe(sseResponse());
 		expect(response.headers.has("x-request-id")).toBe(false);
 
 		expect(outbound).toBeDefined();
 		expect(outbound!.headers.get("authorization")).toBe(`Bearer ${TEST_OAUTH.accessToken}`);
 		expect(outbound!.headers.get("chatgpt-account-id")).toBe(TEST_OAUTH.accountId);
-		expect(outbound!.headers.get("accept")).toBe("text/event-stream");
+		expect(outbound!.headers.get("accept")).toBe(
+			"application/vnd.openai.responses+json",
+		);
 		expect(outbound!.headers.get("content-type")).toBe("application/json");
 		expect(outbound!.headers.get("version")).toBe("0.144.1");
 		expect(outbound!.headers.get("x-codex-beta-features")).toBe("beta-a");
 		expect(outbound!.headers.get("x-codex-turn-metadata")).toBe("turn-metadata");
 		expect(outbound!.headers.get("x-codex-turn-state")).toBe("turn-state-in");
-		expect(outbound!.headers.get("session-id")).toBe("cache-key");
-		for (const name of ["originator", "user-agent", "session_id", "conversation_id", "x-request-id", "x-client-request-id"]) {
-			expect(outbound!.headers.has(name), name).toBe(false);
-		}
-
-		expect(outbound!.body.model).toBe("gpt-5.6-lunar");
-		expect(outbound!.body.stream).toBe(true);
-		expect(outbound!.body.store).toBe(false);
-		expect(outbound!.body).not.toHaveProperty("parallel_tool_calls");
-		expect(outbound!.body.reasoning).toEqual({ effort: "medium" });
-		expect(outbound!.body.include).toEqual(["reasoning.encrypted_content"]);
-		expect(outbound!.body.instructions).toBe("");
-		expect(outbound!.body.custom_passthrough).toEqual({ keep: true });
-		expect(outbound!.body.prompt_cache_key).toBe("cache-key");
-		for (const name of [
-			"max_completion_tokens",
-			"max_output_tokens",
-			"temperature",
-			"top_p",
-			"truncation",
-			"user",
-			"context_management",
-			"previous_response_id",
-			"generate",
-			"prompt_cache_retention",
-			"safety_identifier",
-			"stream_options",
-			"session_id",
-			"conversation_id",
-		]) {
-			expect(outbound!.body, name).not.toHaveProperty(name);
-		}
+		expect(outbound!.headers.get("session_id")).toBe("session-id");
+		expect(outbound!.headers.get("conversation_id")).toBe("conversation-id");
+		expect(outbound!.headers.get("x-request-id")).toBe("request-id");
+		expect(outbound!.headers.get("x-client-request-id")).toBe(
+			"client-request-id",
+		);
+		expect(outbound!.headers.get("originator")).toBe("client-originator");
+		expect(outbound!.headers.get("user-agent")).toBe(
+			"codex_cli_rs/0.144.1",
+		);
+		expect(outbound!.headers.has("session-id")).toBe(false);
+		expect(outbound!.body).toBe(requestBody);
 	});
 
-	it("preserves parallel tool calls for Responses Lite requests", async () => {
-		let outboundBody: Record<string, unknown> | undefined;
-		fetchMock
-			.intercept({
-				origin: "https://codex-relay.test",
-				path: "/backend-api/codex/responses",
-				method: "POST",
-			})
-			.reply((options) => {
-				outboundBody = JSON.parse(String(options.body)) as Record<string, unknown>;
-				return {
-					statusCode: 200,
-					data: sseResponse(),
-					responseOptions: {
-						headers: { "Content-Type": "text/event-stream" },
-					},
-				};
-			});
-
-		const response = await authenticatedFetch("https://example.com/v1/responses", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"X-OpenAI-Internal-Codex-Responses-Lite": "true",
-			},
-			body: JSON.stringify({
-				model: "gpt-5.6-luna",
-				input: "hello",
-				parallel_tool_calls: true,
-			}),
-		});
-
-		expect(response.status).toBe(200);
-		expect(outboundBody?.parallel_tool_calls).toBe(true);
-	});
-
-	it("proxies Codex remote compaction as a unary JSON request", async () => {
+	it("forwards remote compaction bodies without canonicalizing them", async () => {
 		let outbound:
 			| {
 					headers: Headers;
-					body: Record<string, unknown>;
+					body: string;
 			  }
 			| undefined;
 		fetchMock
@@ -207,10 +151,10 @@ describe("Codex upstream bridge", () => {
 				path: "/backend-api/codex/responses/compact",
 				method: "POST",
 			})
-			.reply((options) => {
+			.reply(async (options) => {
 				outbound = {
 					headers: new Headers(options.headers as HeadersInit),
-					body: JSON.parse(String(options.body)) as Record<string, unknown>,
+					body: await new Response(options.body).text(),
 				};
 				return {
 					statusCode: 200,
@@ -231,27 +175,30 @@ describe("Codex upstream bridge", () => {
 				};
 			});
 
+		const requestBody = JSON.stringify({
+			model: "gpt-5.6-luna",
+			input: [
+				{
+					type: "message",
+					role: "system",
+					content: [{ type: "input_text", text: "history" }],
+				},
+			],
+			instructions: "retain decisions",
+			parallel_tool_calls: true,
+			reasoning: { effort: "medium", summary: "auto" },
+			service_tier: "priority",
+			prompt_cache_key: "compact-cache-key",
+			unknown_extension: { keep: true },
+		});
 		const response = await authenticatedFetch("https://example.com/v1/responses/compact", {
 			method: "POST",
 			headers: {
+				Accept: "application/json",
 				"Content-Type": "application/json",
 				"X-Codex-Turn-State": "compact-turn-state-in",
 			},
-			body: JSON.stringify({
-				model: "gpt-5.6-luna",
-				input: [
-					{
-						type: "message",
-						role: "system",
-						content: [{ type: "input_text", text: "history" }],
-					},
-				],
-				instructions: "retain decisions",
-				parallel_tool_calls: true,
-				reasoning: { effort: "medium", summary: "auto" },
-				service_tier: "priority",
-				prompt_cache_key: "compact-cache-key",
-			}),
+			body: requestBody,
 		});
 
 		expect(response.status).toBe(200);
@@ -266,45 +213,34 @@ describe("Codex upstream bridge", () => {
 		});
 		expect(outbound).toBeDefined();
 		expect(outbound!.headers.get("accept")).toBe("application/json");
-		expect(outbound!.headers.get("session-id")).toBe("compact-cache-key");
+		expect(outbound!.headers.has("session-id")).toBe(false);
 		expect(outbound!.headers.get("x-codex-turn-state")).toBe("compact-turn-state-in");
-		expect(outbound!.body).toEqual({
-			model: "gpt-5.6-luna",
-			input: [
-				{
-					type: "message",
-					role: "developer",
-					content: [{ type: "input_text", text: "history" }],
-				},
-			],
-			instructions: "retain decisions",
-			parallel_tool_calls: true,
-			reasoning: { effort: "medium", summary: "auto" },
-			service_tier: "priority",
-			prompt_cache_key: "compact-cache-key",
-		});
+		expect(outbound!.body).toBe(requestBody);
 	});
 
-	it("forwards Responses SSE without collecting when stream is omitted", async () => {
+	it("forwards zstd request bodies without decoding them", async () => {
 		const upstreamSse = sseResponse();
-		mockCodex(upstreamSse);
-		const response = await authenticatedFetch("https://example.com/v1/responses", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: "gpt-5.6-luna",
-				input: "Reply exactly: codex-worker verified",
-				reasoning: { effort: "low" },
-			}),
-		});
-		expect(response.status).toBe(200);
-		expect(response.headers.get("content-type")).toContain("text/event-stream");
-		expect(await response.text()).toBe(upstreamSse);
-	});
-
-	it("accepts the zstd request bodies emitted by Codex", async () => {
-		const upstreamSse = sseResponse();
-		mockCodex(upstreamSse);
+		let outboundBody: Uint8Array | undefined;
+		let outboundHeaders: Headers | undefined;
+		fetchMock
+			.intercept({
+				origin: "https://codex-relay.test",
+				path: "/backend-api/codex/responses",
+				method: "POST",
+			})
+			.reply(async (call) => {
+				outboundHeaders = new Headers(call.headers as HeadersInit);
+				outboundBody = new Uint8Array(
+					await new Response(call.body).arrayBuffer(),
+				);
+				return {
+					statusCode: 200,
+					data: upstreamSse,
+					responseOptions: {
+						headers: { "Content-Type": "text/event-stream" },
+					},
+				};
+			});
 		const body = zstdCompressSync(
 			Buffer.from(
 				JSON.stringify({
@@ -325,72 +261,8 @@ describe("Codex upstream bridge", () => {
 
 		expect(response.status).toBe(200);
 		expect(await response.text()).toBe(upstreamSse);
-	});
-
-	it("accepts transparently decompressed JSON that retains the zstd header", async () => {
-		const upstreamSse = sseResponse();
-		mockCodex(upstreamSse);
-		const response = await authenticatedFetch("https://example.com/v1/responses", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"Content-Encoding": "zstd",
-			},
-			body: JSON.stringify({ model: "gpt-5.6-luna", input: "plain JSON" }),
-		});
-
-		expect(response.status).toBe(200);
-		expect(await response.text()).toBe(upstreamSse);
-	});
-
-	it("returns 413 before reading a body whose declared size exceeds the limit", async () => {
-		const response = await authenticatedFetch("https://example.com/v1/responses", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"Content-Length": String(MAX_JSON_BODY_BYTES + 1),
-			},
-			body: "{}",
-		});
-
-		expect(response.status).toBe(413);
-		expect(response.headers.get("access-control-allow-origin")).toBe("*");
-		expect(await response.json()).toMatchObject({
-			error: { code: "request_too_large", type: "invalid_request_error" },
-		});
-	});
-
-	it("returns 413 when zstd output exceeds the decoded JSON limit", async () => {
-		const oversized = zstdCompressSync(Buffer.alloc(MAX_JSON_BODY_BYTES + 1, 0x20));
-		const response = await authenticatedFetch("https://example.com/v1/responses", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"Content-Encoding": "zstd",
-			},
-			body: oversized,
-		});
-
-		expect(response.status).toBe(413);
-		expect(await response.json()).toMatchObject({
-			error: { code: "request_too_large" },
-		});
-	});
-
-	it("returns invalid_json for a damaged zstd body", async () => {
-		const response = await authenticatedFetch("https://example.com/v1/responses", {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"Content-Encoding": "zstd",
-			},
-			body: Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00]),
-		});
-
-		expect(response.status).toBe(400);
-		expect(await response.json()).toMatchObject({
-			error: { code: "invalid_json" },
-		});
+		expect(outboundHeaders?.get("content-encoding")).toBe("zstd");
+		expect(outboundBody).toEqual(new Uint8Array(body));
 	});
 
 	it("returns a non-streaming Chat Completions response", async () => {
@@ -496,6 +368,7 @@ describe("Codex upstream bridge", () => {
 			requestUrl: "https://example.com/v1/models",
 			requestInit: undefined,
 			status: 404,
+			transparent: false,
 		},
 		{
 			name: "Responses",
@@ -508,6 +381,7 @@ describe("Codex upstream bridge", () => {
 				body: JSON.stringify({ model: "gpt-5.6-luna", input: "test" }),
 			},
 			status: 401,
+			transparent: true,
 		},
 		{
 			name: "remote compaction",
@@ -523,6 +397,7 @@ describe("Codex upstream bridge", () => {
 				}),
 			},
 			status: 422,
+			transparent: true,
 		},
 		{
 			name: "Chat Completions",
@@ -538,6 +413,7 @@ describe("Codex upstream bridge", () => {
 				}),
 			},
 			status: 429,
+			transparent: false,
 		},
 	])("preserves $name upstream error bodies with safe headers", async (testCase) => {
 		const upstreamBody = JSON.stringify({
@@ -567,7 +443,11 @@ describe("Codex upstream bridge", () => {
 		expect(response.headers.get("content-type")).toContain("application/problem+json");
 		expect(response.headers.get("retry-after")).toBe("5");
 		expect(response.headers.get("x-request-id")).toBe("upstream-request-id");
-		expect(response.headers.has("x-upstream-error")).toBe(false);
+		if (testCase.transparent) {
+			expect(response.headers.get("x-upstream-error")).toBe("drop-me");
+		} else {
+			expect(response.headers.has("x-upstream-error")).toBe(false);
+		}
 		expect(response.headers.has("set-cookie")).toBe(false);
 		expect(response.headers.get("access-control-allow-origin")).toBe("*");
 		expect(await response.text()).toBe(upstreamBody);

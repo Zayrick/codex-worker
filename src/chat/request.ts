@@ -1,4 +1,3 @@
-import { prepareCodexRequestBody } from "../codex/request-policy";
 import { ApiError, requireRecord, requireString } from "../shared/api-error";
 import { isRecord, type JsonObject } from "../shared/json";
 import { messageToResponseItems } from "./content";
@@ -26,6 +25,10 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 		model,
 		instructions: "",
 		input: responseInput,
+		store: false,
+		stream: true,
+		reasoning: { effort: "medium" },
+		include: ["reasoning.encrypted_content"],
 	};
 
 	if (tools.items.length > 0) {
@@ -67,7 +70,7 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 	const stream = input.stream === true;
 	const streamOptions = isRecord(input.stream_options) ? input.stream_options : undefined;
 	return {
-		body: prepareCodexRequestBody(body),
+		body,
 		model,
 		stream,
 		includeUsage: streamOptions?.include_usage === true,

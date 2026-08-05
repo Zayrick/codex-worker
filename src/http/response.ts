@@ -156,13 +156,6 @@ export function upstreamProxyResponse(response: Response): Response {
 	);
 }
 
-export function codexSseResponse(response: Response): Response {
-	return new Response(response.body, {
-		status: 200,
-		headers: sseHeaders(response.headers),
-	});
-}
-
 export function chatSseResponse(
 	body: ReadableStream<Uint8Array>,
 	source: Headers,
