@@ -1,3 +1,4 @@
+import { toCodexMessageRole } from "../codex/request";
 import { ApiError, requireRecord, requireString } from "../shared/api-error";
 import { isRecord, type JsonObject } from "../shared/json";
 import { messageToResponseItems } from "./content";
@@ -17,7 +18,7 @@ export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 	for (let index = 0; index < messages.length; index++) {
 		const message = requireRecord(messages[index], `messages[${index}]`);
 		const sourceRole = requireString(message.role, `messages[${index}].role`, `messages[${index}].role must be a string.`);
-		const role = sourceRole === "system" ? "developer" : sourceRole;
+		const role = toCodexMessageRole(sourceRole);
 		responseInput.push(...messageToResponseItems(message, role, index, tools.customNames, pendingToolKinds));
 	}
 

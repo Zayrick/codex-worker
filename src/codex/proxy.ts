@@ -2,6 +2,11 @@ import { getCodexCredentials } from "../auth/credentials";
 import { adaptLiveBootstrapRequest } from "../live/request";
 import { ApiError, isAbortError } from "../shared/api-error";
 import { resolveRelayUrl } from "./client";
+import {
+	adaptResponsesRequest,
+	adaptResponsesWebSocketMessage,
+	isResponsesWebSocketRequest,
+} from "./request";
 
 const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
 
@@ -66,7 +71,9 @@ export async function forwardCodexProxy(
 	env: CodexProxyEnv,
 ): Promise<Response> {
 	const credentials = await getCodexCredentials(env);
-	const outgoingRequest = await adaptLiveBootstrapRequest(request);
+	const outgoingRequest = await adaptResponsesRequest(
+		await adaptLiveBootstrapRequest(request),
+	);
 	const target = resolveCodexProxyUrl(
 		env.CODEX_RELAY_URL,
 		clientUrl,
@@ -87,8 +94,9 @@ export async function forwardCodexProxy(
 		init.body = outgoingRequest.body;
 	}
 
+	let response: Response;
 	try {
-		return await fetch(target, init);
+		response = await fetch(target, init);
 	} catch (error) {
 		if (isAbortError(error)) throw error;
 		throw new ApiError(
@@ -98,6 +106,105 @@ export async function forwardCodexProxy(
 			"codex_unavailable",
 		);
 	}
+	return isResponsesWebSocketRequest(outgoingRequest) && response.webSocket
+		? bridgeResponsesWebSocket(response)
+		: response;
+}
+
+function bridgeResponsesWebSocket(response: Response): Response {
+	const upstream = response.webSocket;
+	if (!upstream) return response;
+
+	const pair = new WebSocketPair();
+	const downstream = pair[0];
+	const proxy = pair[1];
+	upstream.binaryType = "arraybuffer";
+	proxy.binaryType = "arraybuffer";
+
+	proxy.addEventListener("message", (event) => {
+		forwardWebSocketMessage(
+			upstream,
+			typeof event.data === "string"
+				? adaptResponsesWebSocketMessage(event.data)
+				: event.data,
+			proxy,
+		);
+	});
+	upstream.addEventListener("message", (event) => {
+		forwardWebSocketMessage(proxy, event.data, upstream);
+	});
+	proxy.addEventListener("close", (event) => {
+		forwardWebSocketClose(proxy, upstream, event);
+	});
+	upstream.addEventListener("close", (event) => {
+		forwardWebSocketClose(upstream, proxy, event);
+	});
+	proxy.addEventListener("error", () => closeWebSocketPair(proxy, upstream));
+	upstream.addEventListener("error", () => closeWebSocketPair(upstream, proxy));
+
+	proxy.accept({ allowHalfOpen: true });
+	upstream.accept({ allowHalfOpen: true });
+	return new Response(null, {
+		status: response.status,
+		statusText: response.statusText,
+		headers: response.headers,
+		webSocket: downstream,
+	});
+}
+
+function forwardWebSocketMessage(
+	target: WebSocket,
+	data: unknown,
+	source: WebSocket,
+): void {
+	try {
+		if (
+			typeof data === "string" ||
+			data instanceof ArrayBuffer ||
+			ArrayBuffer.isView(data)
+		) {
+			target.send(data);
+			return;
+		}
+	} catch {
+		// Both peers are closed below.
+	}
+	closeWebSocketPair(source, target);
+}
+
+function forwardWebSocketClose(
+	source: WebSocket,
+	target: WebSocket,
+	event: CloseEvent,
+): void {
+	const code = isForwardableCloseCode(event.code) ? event.code : 1011;
+	closeWebSocket(target, code, event.reason);
+	closeWebSocket(source, code, event.reason);
+}
+
+function closeWebSocketPair(first: WebSocket, second: WebSocket): void {
+	closeWebSocket(first, 1011, "WebSocket proxy error");
+	closeWebSocket(second, 1011, "WebSocket proxy error");
+}
+
+function closeWebSocket(socket: WebSocket, code: number, reason: string): void {
+	if (socket.readyState === WebSocket.CLOSED) return;
+	try {
+		socket.close(code, reason);
+	} catch {
+		// The peer may already be closing.
+	}
+}
+
+function isForwardableCloseCode(code: number): boolean {
+	return (
+		code >= 1000 &&
+		code <= 4999 &&
+		code !== 1004 &&
+		code !== 1005 &&
+		code !== 1006 &&
+		code !== 1015
+	);
 }
 
 export function resolveCodexProxyUrl(

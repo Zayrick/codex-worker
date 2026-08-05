@@ -1,5 +1,6 @@
-import { exports } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { forwardCodexProxy } from "../../src/codex/proxy";
 import { upstreamProxyResponse, withCors } from "../../src/http/response";
 import { isRecord } from "../../src/shared/json";
 import { fetchMock } from "../support/fetch-mock";
@@ -243,53 +244,163 @@ describe("streaming compatibility proxy", () => {
 		);
 	});
 
-	it("forwards a Responses WebSocket handshake and sanitizes its headers", async () => {
-		fetchMock
-			.intercept({
-				origin: "https://codex-relay.test",
-				path: "/backend-api/codex/responses",
-				method: "GET",
-			})
-			.reply((call) => {
-				expect(call.headers.get("upgrade")).toBe("websocket");
-				expect(call.headers.get("sec-websocket-protocol")).toBe(
-					"openai-responses-v1",
-				);
-				expect(call.headers.get("openai-beta")).toBe(
-					"responses_websockets=2026-02-06",
-				);
-				expect(call.headers.has("sec-websocket-key")).toBe(false);
-				expect(call.headers.get("authorization")).toBe(
-					`Bearer ${TEST_OAUTH.accessToken}`,
-				);
-				return {
-					statusCode: 426,
-					data: JSON.stringify({ error: "upgrade rejected" }),
-					responseOptions: {
-						headers: {
-							"Content-Type": "application/json",
-							"Set-Cookie": "upstream=secret",
-						},
-					},
-				};
+	it("bridges Responses WebSocket frames and normalizes Codex request events", async () => {
+		const upstreamPair = new WebSocketPair();
+		const upstreamSocket = upstreamPair[0];
+		const upstreamPeer = upstreamPair[1];
+		upstreamPeer.accept();
+		let outboundHeaders: Headers | undefined;
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+			outboundHeaders = new Headers(init?.headers);
+			return new Response(null, {
+				status: 101,
+				headers: {
+					"Sec-WebSocket-Protocol": "openai-responses-v1",
+					"Set-Cookie": "upstream=secret",
+				},
+				webSocket: upstreamSocket,
 			});
+		});
 
-		const response = await authenticatedFetch(
-			"https://example.com/v1/responses",
-			{
+		const request = new Request("https://example.com/v1/responses", {
 				method: "GET",
 				headers: {
 					Upgrade: "websocket",
 					"Sec-WebSocket-Key": "downstream-key",
 					"Sec-WebSocket-Protocol": "openai-responses-v1",
 				},
-			},
+			});
+		const response = withCors(
+			upstreamProxyResponse(
+				await forwardCodexProxy(request, new URL(request.url), env),
+			),
+			"*",
 		);
 
-		expect(response.status).toBe(426);
+		expect(response.status).toBe(101);
+		expect(outboundHeaders?.get("upgrade")).toBe("websocket");
+		expect(outboundHeaders?.get("sec-websocket-protocol")).toBe(
+			"openai-responses-v1",
+		);
+		expect(outboundHeaders?.get("openai-beta")).toBe(
+			"responses_websockets=2026-02-06",
+		);
+		expect(outboundHeaders?.has("sec-websocket-key")).toBe(false);
+		expect(outboundHeaders?.get("authorization")).toBe(
+			`Bearer ${TEST_OAUTH.accessToken}`,
+		);
 		expect(response.headers.has("set-cookie")).toBe(false);
-		expect(response.headers.get("access-control-allow-origin")).toBe("*");
-		expect(await response.json()).toEqual({ error: "upgrade rejected" });
+		expect(response.headers.get("sec-websocket-protocol")).toBe(
+			"openai-responses-v1",
+		);
+		const downstream = response.webSocket;
+		expect(downstream).not.toBeNull();
+		downstream!.accept();
+
+		const wsRequest = {
+			type: "response.create",
+			model: "gpt-5.6-luna",
+			input: [
+				{
+					type: "message",
+					role: "system",
+					content: [{ type: "input_text", text: "system prompt" }],
+				},
+				{
+					type: "function_call_output",
+					call_id: "call_previous",
+					output: "tool result",
+				},
+			],
+			previous_response_id: "resp_previous",
+			store: false,
+			unknown_extension: { keep: true },
+		};
+		const upstreamMessage = new Promise<string>((resolve) => {
+			upstreamPeer.addEventListener("message", (event) =>
+				resolve(String(event.data)),
+			);
+		});
+		downstream!.send(JSON.stringify(wsRequest));
+		expect(JSON.parse(await upstreamMessage)).toEqual({
+			...wsRequest,
+			input: [
+				{ ...wsRequest.input[0], role: "developer" },
+				wsRequest.input[1],
+			],
+		});
+
+		const appendRequest = {
+			type: "response.append",
+			input: [
+				{
+					type: "message",
+					role: "system",
+					content: [{ type: "input_text", text: "appended system prompt" }],
+				},
+				{
+					type: "function_call_output",
+					call_id: "call_current",
+					output: "next tool result",
+				},
+			],
+			previous_response_id: "resp_current",
+			unknown_extension: { keep: true },
+		};
+		const upstreamAppendMessage = new Promise<string>((resolve) => {
+			upstreamPeer.addEventListener("message", (event) =>
+				resolve(String(event.data)),
+			);
+		});
+		downstream!.send(JSON.stringify(appendRequest));
+		expect(JSON.parse(await upstreamAppendMessage)).toEqual({
+			...appendRequest,
+			type: "response.create",
+			input: [
+				{ ...appendRequest.input[0], role: "developer" },
+				appendRequest.input[1],
+			],
+		});
+
+		const emptyAppendRequest = JSON.stringify({
+			type: "response.append",
+			input: [],
+		});
+		const upstreamEmptyAppendMessage = new Promise<string>((resolve) => {
+			upstreamPeer.addEventListener("message", (event) =>
+				resolve(String(event.data)),
+			);
+		});
+		downstream!.send(emptyAppendRequest);
+		expect(JSON.parse(await upstreamEmptyAppendMessage)).toEqual({
+			type: "response.create",
+			input: [],
+		});
+
+		const otherRequest = JSON.stringify({
+			type: "session.update",
+			input: [{ type: "message", role: "system", content: "unchanged" }],
+		});
+		const upstreamOtherMessage = new Promise<string>((resolve) => {
+			upstreamPeer.addEventListener("message", (event) =>
+				resolve(String(event.data)),
+			);
+		});
+		downstream!.send(otherRequest);
+		expect(await upstreamOtherMessage).toBe(otherRequest);
+
+		const responseEvent = JSON.stringify({
+			type: "response.completed",
+			response: { id: "resp_current" },
+		});
+		const downstreamMessage = new Promise<string>((resolve) => {
+			downstream!.addEventListener("message", (event) =>
+				resolve(String(event.data)),
+			);
+		});
+		upstreamPeer.send(responseEvent);
+		expect(await downstreamMessage).toBe(responseEvent);
+		downstream!.close(1000, "done");
 	});
 
 	it("forwards a Realtime sideband WebSocket handshake without translating frames", async () => {

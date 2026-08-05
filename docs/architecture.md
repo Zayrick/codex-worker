@@ -118,16 +118,19 @@ fetch-handler
   → OpenAI JSON、Responses SSE 或 Chat SSE 表示
 ```
 
-Responses、compact 与其他透明 HTTP/WebSocket 请求：
+Responses、compact 与 Responses WebSocket：
 
 ```text
 fetch-handler
   → 路径族与方法匹配
   → API_KEYS 解密与启用 Key 鉴权
   → codex/proxy
+  → codex/request（顶层 input 的 system → developer；WS append → create）
   → 清理客户端/边界 header、写入 OAuth
-  → relay（请求正文流、响应正文流或 Response.webSocket 直接交接）
+  → relay（HTTP 响应流或双向 WebSocket 帧桥接）
 ```
+
+其他透明 HTTP/WebSocket 路径不进入角色适配，正文流或 `Response.webSocket` 直接交接。
 
 管理面板与 OAuth 设备登录：
 
@@ -155,9 +158,8 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
 - Worker 生成的错误使用统一 OpenAI error envelope；已鉴权请求的上游错误保持状态与
   正文。结构化 API 使用最小响应头 allowlist；透明代理使用 denylist 删除 cookie、
   hop-by-hop、Cloudflare 和内部服务 header，同时保留媒体/范围/WebSocket 所需 header。
-- Chat 与 Completions 的 JSON 请求编码体及 zstd 解码结果限制为 4 MiB；OAuth 和模型
-  目录使用更小的专用上限。Responses、compact 与其他透明代理路径只流式转交正文，
-  不套用 4 MiB JSON 上限。
+- Chat、Completions、Responses 与 compact 的 JSON 请求编码体及 zstd 解码结果限制为
+  4 MiB；OAuth 和模型目录使用更小的专用上限。其他透明代理路径只流式转交正文。
 - OAuth credentials、API_KEYS、设备 state 与管理会话分别使用独立 AES-GCM purpose
   string。`DATA_ENCRYPTION_KEY` 只负责加密；`ADMIN_SECRET` 只在登录表单 POST body 中
   传输。长期 secret 不得进入 URL；`ADMIN_PATH` 只是额外隐藏层，不能替代管理密钥。
@@ -170,7 +172,7 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
 - 旧版 Completions 复用 Chat → Responses 转换与 Chat 事件 reducer，只在最外层转换
   prompt、`text_completion` envelope 和 SSE chunk，避免维护第二套 Codex 事件解释器。
 - 透明代理的“传输兼容”不等于上游“协议兼容”；Codex 原生路径映射、供应商路径分流、
-  WebSocket 直交和 Realtime 媒体面边界以 `docs/compatibility.md` 为准。
+  Responses WebSocket 帧桥接和 Realtime 媒体面边界以 `docs/compatibility.md` 为准。
 - KV 的设备登录检查后写入和 `API_KEYS` 读改写都不是原子事务；面板面向低频、单管理
   员配置。需要并发排他或事务语义时迁移到 Durable Object/D1。
 

@@ -48,28 +48,37 @@ afterAll(() => {
 });
 
 describe("Codex upstream bridge", () => {
-	it("forwards Responses body bytes without parsing or rewriting them", async () => {
+	it("rewrites Responses system messages without changing other fields", async () => {
 		let outbound:
 			| {
 					headers: Headers;
 					body: string;
 			  }
 			| undefined;
-		const requestBody = [
-			"{",
-			'  "model": "gpt-5.6-lunar",',
-			'  "input": [{"type":"function_call_output","call_id":"call_previous","output":"tool result"}],',
-			'  "previous_response_id": "resp_previous",',
-			'  "store": true,',
-			'  "stream": false,',
-			'  "tools": [{"type":"function","name":"lookup"}],',
-			'  "parallel_tool_calls": true,',
-			'  "include": ["file_search_call.results"],',
-			'  "service_tier": "flex",',
-			'  "unknown_extension": {"keep":true}',
-			"}",
-			"",
-		].join("\n");
+		const requestPayload = {
+			model: "gpt-5.6-lunar",
+			input: [
+				{
+					type: "message",
+					role: "system",
+					content: [{ type: "input_text", text: "system prompt" }],
+				},
+				{
+					type: "function_call_output",
+					call_id: "call_previous",
+					output: "tool result",
+				},
+			],
+			previous_response_id: "resp_previous",
+			store: true,
+			stream: false,
+			tools: [{ type: "function", name: "lookup" }],
+			parallel_tool_calls: true,
+			include: ["file_search_call.results"],
+			service_tier: "flex",
+			unknown_extension: { keep: true },
+		};
+		const requestBody = JSON.stringify(requestPayload, null, 2);
 		fetchMock
 			.intercept({
 				origin: "https://codex-relay.test",
@@ -135,10 +144,16 @@ describe("Codex upstream bridge", () => {
 			"codex_cli_rs/0.144.1",
 		);
 		expect(outbound!.headers.has("session-id")).toBe(false);
-		expect(outbound!.body).toBe(requestBody);
+		expect(JSON.parse(outbound!.body)).toEqual({
+			...requestPayload,
+			input: [
+				{ ...requestPayload.input[0], role: "developer" },
+				requestPayload.input[1],
+			],
+		});
 	});
 
-	it("forwards remote compaction bodies without canonicalizing them", async () => {
+	it("rewrites compact system messages without changing other fields", async () => {
 		let outbound:
 			| {
 					headers: Headers;
@@ -175,7 +190,7 @@ describe("Codex upstream bridge", () => {
 				};
 			});
 
-		const requestBody = JSON.stringify({
+		const requestPayload = {
 			model: "gpt-5.6-luna",
 			input: [
 				{
@@ -190,7 +205,8 @@ describe("Codex upstream bridge", () => {
 			service_tier: "priority",
 			prompt_cache_key: "compact-cache-key",
 			unknown_extension: { keep: true },
-		});
+		};
+		const requestBody = JSON.stringify(requestPayload);
 		const response = await authenticatedFetch("https://example.com/v1/responses/compact", {
 			method: "POST",
 			headers: {
@@ -215,7 +231,10 @@ describe("Codex upstream bridge", () => {
 		expect(outbound!.headers.get("accept")).toBe("application/json");
 		expect(outbound!.headers.has("session-id")).toBe(false);
 		expect(outbound!.headers.get("x-codex-turn-state")).toBe("compact-turn-state-in");
-		expect(outbound!.body).toBe(requestBody);
+		expect(JSON.parse(outbound!.body)).toEqual({
+			...requestPayload,
+			input: [{ ...requestPayload.input[0], role: "developer" }],
+		});
 	});
 
 	it("forwards zstd request bodies without decoding them", async () => {
