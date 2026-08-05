@@ -176,6 +176,67 @@ describe("Anthropic Messages request adaptation", () => {
 
 		expect(adapted.body.reasoning).toEqual({ effort: "auto" });
 	});
+
+	it("wraps message-level system roles as user-visible reminders", () => {
+		const adapted = messagesRequestToResponses({
+			model: "model",
+			system: [{ type: "text", text: "Top-level rules" }],
+			messages: [
+				{ role: "user", content: "hello" },
+				{ role: "system", content: "Follow the project instructions" },
+				{ role: "assistant", content: [{ type: "text", text: "ok" }] },
+				{
+					role: "system",
+					content: [
+						{ type: "text", text: "Use the current repo" },
+						{ type: "image", source: { type: "url", url: "ignored" } },
+					],
+				},
+				{
+					role: "system",
+					content: " x-anthropic-billing-header: cc_version=2.1.63;",
+				},
+			],
+		});
+
+		expect(adapted.body.input).toEqual([
+			{
+				type: "message",
+				role: "developer",
+				content: [{ type: "input_text", text: "Top-level rules" }],
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: "hello" }],
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [
+					{
+						type: "input_text",
+						text: "<system-reminder>\nFollow the project instructions\n</system-reminder>",
+					},
+				],
+			},
+			{
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: "ok" }],
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [
+					{
+						type: "input_text",
+						text: "<system-reminder>\nUse the current repo\n</system-reminder>",
+					},
+				],
+			},
+		]);
+	});
 });
 
 describe("Anthropic Messages non-stream response", () => {

@@ -20,7 +20,7 @@ afterAll(() => {
 });
 
 describe("Anthropic Messages HTTP routes", () => {
-	it("converts /v1/messages through the Codex OAuth Responses endpoint", async () => {
+	it("converts /v1/messages and message-level system reminders", async () => {
 		let outboundBody: Record<string, unknown> | undefined;
 		fetchMock
 			.intercept({
@@ -75,7 +75,10 @@ describe("Anthropic Messages HTTP routes", () => {
 					model: "gpt-5.6-luna",
 					max_tokens: 100,
 					system: "Be concise.",
-					messages: [{ role: "user", content: "hello" }],
+					messages: [
+						{ role: "user", content: "hello" },
+						{ role: "system", content: "Follow the project instructions" },
+					],
 				}),
 			},
 		);
@@ -110,6 +113,16 @@ describe("Anthropic Messages HTTP routes", () => {
 				type: "message",
 				role: "user",
 				content: [{ type: "input_text", text: "hello" }],
+			},
+			{
+				type: "message",
+				role: "user",
+				content: [
+					{
+						type: "input_text",
+						text: "<system-reminder>\nFollow the project instructions\n</system-reminder>",
+					},
+				],
 			},
 		]);
 	});

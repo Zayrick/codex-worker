@@ -46,6 +46,10 @@ export function messagesRequestToResponses(
 			`messages[${index}].role`,
 			`messages[${index}].role must be 'user' or 'assistant'.`,
 		);
+		if (role === "system") {
+			appendMessageSystemReminder(responseInput, message.content);
+			continue;
+		}
 		if (role !== "user" && role !== "assistant") {
 			throw invalidRequest(
 				`messages[${index}].role must be 'user' or 'assistant'.`,
@@ -269,6 +273,48 @@ function appendMessage(
 		);
 	}
 	flush();
+}
+
+function appendMessageSystemReminder(
+	output: JsonObject[],
+	value: unknown,
+): void {
+	const parts = messageSystemTextParts(value);
+	if (parts.length === 0) return;
+	const text = parts.join("\n");
+	if (text.trim() === "") return;
+	output.push({
+		type: "message",
+		role: "user",
+		content: [
+			{
+				type: "input_text",
+				text: `<system-reminder>\n${text}\n</system-reminder>`,
+			},
+		],
+	});
+}
+
+function messageSystemTextParts(value: unknown): string[] {
+	if (typeof value === "string") {
+		return value === "" || isClaudeCodeAttributionSystemText(value)
+			? []
+			: [value];
+	}
+	if (!Array.isArray(value)) return [];
+
+	const parts: string[] = [];
+	for (const item of value) {
+		if (!isRecord(item) || item.type !== "text") continue;
+		const text = stringField(item, "text");
+		if (!text || isClaudeCodeAttributionSystemText(text)) continue;
+		parts.push(text);
+	}
+	return parts;
+}
+
+function isClaudeCodeAttributionSystemText(value: string): boolean {
+	return value.trimStart().startsWith("x-anthropic-billing-header:");
 }
 
 function adaptMediaBlock(
