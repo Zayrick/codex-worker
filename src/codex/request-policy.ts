@@ -2,20 +2,48 @@ import type { JsonObject } from "../shared/json";
 
 export type RequestBodyPolicy = (body: JsonObject) => JsonObject;
 
-export const applyResponseCreateEgressPolicy = composeRequestBodyPolicies(
-	overrideRequestFields({
-		store: false,
-	}),
-);
+export interface RequestBodyPolicyDefinition {
+	readonly remove?: readonly string[];
+	readonly override?: Readonly<JsonObject>;
+}
 
-export const applyConvertedResponseEgressPolicy = composeRequestBodyPolicies(
-	applyResponseCreateEgressPolicy,
-	overrideRequestFields({
+const responseCreateEgressPolicy = {
+	remove: [
+		"max_completion_tokens",
+		"max_output_tokens",
+		"maxOutputTokens",
+		"max_tokens",
+		"context_management",
+	],
+	override: {
+		store: false,
+	},
+} as const satisfies RequestBodyPolicyDefinition;
+
+const convertedResponseEgressPolicy = {
+	override: {
 		instructions: "",
 		stream: true,
 		include: Object.freeze(["reasoning.encrypted_content"]),
-	}),
+	},
+} as const satisfies RequestBodyPolicyDefinition;
+
+export const applyResponseCreateEgressPolicy =
+	defineRequestBodyPolicy(responseCreateEgressPolicy);
+
+export const applyConvertedResponseEgressPolicy = composeRequestBodyPolicies(
+	applyResponseCreateEgressPolicy,
+	defineRequestBodyPolicy(convertedResponseEgressPolicy),
 );
+
+export function defineRequestBodyPolicy(
+	definition: RequestBodyPolicyDefinition,
+): RequestBodyPolicy {
+	return composeRequestBodyPolicies(
+		removeRequestFields(...(definition.remove ?? [])),
+		overrideRequestFields(definition.override ?? {}),
+	);
+}
 
 export function composeRequestBodyPolicies(
 	...policies: RequestBodyPolicy[]

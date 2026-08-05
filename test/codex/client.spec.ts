@@ -76,6 +76,13 @@ describe("Codex upstream bridge", () => {
 			parallel_tool_calls: true,
 			include: ["file_search_call.results"],
 			service_tier: "flex",
+			max_completion_tokens: 1,
+			max_output_tokens: 2,
+			maxOutputTokens: 3,
+			max_tokens: 4,
+			context_management: [
+				{ type: "compaction", compact_threshold: 12_000 },
+			],
 			unknown_extension: { keep: true },
 		};
 		const requestBody = JSON.stringify(requestPayload, null, 2);
@@ -144,8 +151,18 @@ describe("Codex upstream bridge", () => {
 			"codex_cli_rs/0.144.1",
 		);
 		expect(outbound!.headers.has("session-id")).toBe(false);
+		const expectedPayload: Record<string, unknown> = { ...requestPayload };
+		for (const field of [
+			"max_completion_tokens",
+			"max_output_tokens",
+			"maxOutputTokens",
+			"max_tokens",
+			"context_management",
+		]) {
+			delete expectedPayload[field];
+		}
 		expect(JSON.parse(outbound!.body)).toEqual({
-			...requestPayload,
+			...expectedPayload,
 			store: false,
 			input: [
 				{ ...requestPayload.input[0], role: "developer" },

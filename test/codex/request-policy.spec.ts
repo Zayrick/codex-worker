@@ -3,9 +3,18 @@ import {
 	applyConvertedResponseEgressPolicy,
 	applyResponseCreateEgressPolicy,
 	composeRequestBodyPolicies,
+	defineRequestBodyPolicy,
 	overrideRequestFields,
 	removeRequestFields,
 } from "../../src/codex/request-policy";
+
+const UNSUPPORTED_RESPONSE_FIELDS = [
+	"max_completion_tokens",
+	"max_output_tokens",
+	"maxOutputTokens",
+	"max_tokens",
+	"context_management",
+] as const;
 
 describe("Codex request body policies", () => {
 	it("composes declarative overrides and removals without mutating the downstream body", () => {
@@ -55,6 +64,41 @@ describe("Codex request body policies", () => {
 		expect(applyResponseCreateEgressPolicy({})).toEqual({ store: false });
 	});
 
+	it("removes every unsupported token-limit alias and context management field", () => {
+		const body = Object.fromEntries([
+			...UNSUPPORTED_RESPONSE_FIELDS.map((key, index) => [key, index + 1]),
+			["model", "gpt-5.6-luna"],
+			["unknown_extension", { keep: true }],
+		]);
+
+		expect(applyResponseCreateEgressPolicy(body)).toEqual({
+			model: "gpt-5.6-luna",
+			unknown_extension: { keep: true },
+			store: false,
+		});
+		for (const field of UNSUPPORTED_RESPONSE_FIELDS) {
+			expect(body).toHaveProperty(field);
+		}
+	});
+
+	it("builds new policies from data without changing the policy engine", () => {
+		const applyPolicy = defineRequestBodyPolicy({
+			remove: ["retired_parameter"],
+			override: { required_parameter: "upstream-value" },
+		});
+
+		expect(
+			applyPolicy({
+				retired_parameter: true,
+				required_parameter: "downstream-value",
+				future_parameter: "preserved",
+			}),
+		).toEqual({
+			required_parameter: "upstream-value",
+			future_parameter: "preserved",
+		});
+	});
+
 	it("centralizes converted-response transport invariants", () => {
 		expect(
 			applyConvertedResponseEgressPolicy({
@@ -62,6 +106,8 @@ describe("Codex request body policies", () => {
 				store: true,
 				stream: false,
 				include: ["downstream.value"],
+				max_tokens: 1024,
+				context_management: [{ type: "compaction" }],
 			}),
 		).toEqual({
 			instructions: "",

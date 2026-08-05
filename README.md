@@ -88,10 +88,11 @@ https://your-worker.example.com/<ADMIN_PATH>/admin
 `X-Goog-Api-Key` 的顺序选择，不会在首选值失败后回退。缺少、错误或已停用的 Key
 均返回空正文 `404`。
 
-Responses 与 compact 只检查顶层 `input`，把消息项的 `system` 角色改为 `developer`；
-工具调用、续接 ID、缓存字段、未知字段和上游响应不作协议清洗。Responses WebSocket
-识别客户端 `response.create` 与 `response.append` 文本帧并执行同一角色改写，事件类型和
-其他字段保持不变；其他帧也直接转交。Chat 与旧版 Completions 根据 `stream`
+Responses 与 compact 会检查顶层 `input`，把消息项的 `system` 角色改为 `developer`。
+Responses 创建请求还会固定 `store: false`，并移除 Codex 不支持的 `max_completion_tokens`、
+`max_output_tokens`、`maxOutputTokens`、`max_tokens` 与 `context_management`；其他未知字段保留。
+Responses WebSocket 对 `response.create` 应用同一策略，`response.append` 只改写角色，其他帧
+直接转交。Chat 与旧版 Completions 根据 `stream`
 返回 JSON 或 SSE；其他透明路径继续支持 multipart、二进制、Range 和 WebSocket 流式
 传输，同时隔离 OAuth、Cookie、内部边界和 hop-by-hop header。
 Anthropic Messages 使用其原生 JSON/SSE/error envelope；Gemini 支持 models 列表与详情、

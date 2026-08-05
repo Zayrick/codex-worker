@@ -21,8 +21,8 @@ Codex 直连别名可传输常规 HTTP 方法，`CONNECT` 一律不开放。
 | `GET /v1/models` | 协议转换 | 读取 Codex 模型目录并输出 OpenAI model list；带 `client_version` 查询参数时保留 Codex CLI 目录格式。 |
 | `POST /v1/chat/completions` | 协议转换 | Chat 请求转换为 Responses；普通响应转换为 JSON，`stream: true` 转换为 Chat SSE。 |
 | `POST /v1/completions` | 协议转换 | 旧版 prompt 转为 Responses，并输出 `text_completion` JSON/SSE。当前只支持字符串或单项字符串数组、`n=1`、`best_of=1`；不伪造多候选、token-id prompt 或完整 logprobs 语义。 |
-| `POST /v1/responses`、`POST /v1/responses/compact` | Codex 原生映射 | 路径映射到 `/backend-api/codex/responses*`；只把顶层 `input` 数组中 `role: "system"` 的项改为 `developer`，其余正文字段、查询参数、上游状态、内容类型和响应流保持不变。 |
-| `GET /v1/responses` + `Upgrade: websocket` | Codex 原生映射 | 建立双向 WebSocket 桥；识别客户端 `response.create` 与 `response.append` 文本帧并执行同一顶层 `input` 角色改写，事件类型和其他字段保持不变。 |
+| `POST /v1/responses`、`POST /v1/responses/compact` | Codex 原生映射 | 路径映射到 `/backend-api/codex/responses*`，并把顶层 `input` 数组中 `role: "system"` 的项改为 `developer`。Responses 创建请求还固定 `store: false` 并移除不受支持的 token-limit 别名与 `context_management`；compact 不应用创建参数策略。 |
+| `GET /v1/responses` + `Upgrade: websocket` | Codex 原生映射 | 建立双向 WebSocket 桥；`response.create` 应用 Responses 创建策略，`response.append` 只执行顶层 `input` 角色改写，其他帧保持不变。 |
 | `/v1/images/generations`、`/v1/images/edits` | Codex 原生映射 | 映射到 `/backend-api/codex/images/*`。JSON、multipart 图片上传、SSE/JSON/二进制下载都按流处理；其他 `/v1/images/*` 动作是否存在由上游决定。 |
 | `POST /v1/messages` | 协议转换 | Anthropic Messages 请求转换为 Codex Responses；非流式结果转换为 Message JSON，`stream: true` 转换为带命名事件的 Anthropic SSE。支持 system、文本、图片、文档、thinking signature、客户端工具、工具结果、Web Search 块、tool choice、thinking effort、usage、stop reason 和 Anthropic error envelope。 |
 | `POST /v1/messages/count_tokens` | 本地转换 | 使用与创建请求相同的结构转换，再以本地 `cl100k_base` tokenizer 估算 `input_tokens`；不会访问 Anthropic token-count 服务，结果不保证与 Anthropic 自有 tokenizer 完全一致。 |
@@ -53,10 +53,12 @@ Gemini action 与 Content/Part 结构以 Google 的
 [countTokens API](https://ai.google.dev/api/tokens) 为边界。转换规则同时对照
 `.reference/CLIProxyAPI`，Codex 请求与目标路径只依据 `.reference/codex`。
 
-Responses 路径不会补充正文默认值、删除字段，也不会根据 `prompt_cache_key` 等正文
-字段推导请求头。唯一的正文适配是顶层 `input` 消息项的 `system → developer`；发生
-改写时正文重新编码为 JSON，没有目标角色时原始正文及 `Content-Encoding: zstd`
-保持不变。
+Responses 创建请求始终把 `store` 覆盖为 `false`，并在出站边界移除
+`max_completion_tokens`、`max_output_tokens`、`maxOutputTokens`、`max_tokens` 和
+`context_management`；其他未知字段不据此删除，也不会根据 `prompt_cache_key` 等正文
+字段推导请求头。Responses 与 compact 都会把顶层 `input` 消息项的 `system` 改为
+`developer`。正文无需变化时会保留原始编码（包括 `Content-Encoding: zstd`）；需要
+改写时则重新编码为 JSON。
 
 旧版 Completions 当前实际解释 `model`、`prompt`、`stream`、`echo`、`n`、`best_of`，
 并传递 metadata、prompt cache、reasoning、service tier 和 stream usage 选项。

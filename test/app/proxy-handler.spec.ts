@@ -323,6 +323,11 @@ describe("streaming compatibility proxy", () => {
 			],
 			previous_response_id: "resp_previous",
 			store: true,
+			max_completion_tokens: 1,
+			max_output_tokens: 2,
+			maxOutputTokens: 3,
+			max_tokens: 4,
+			context_management: [{ type: "compaction" }],
 			unknown_extension: { keep: true },
 		};
 		const upstreamMessage = await exchangeWebSocketMessage(
@@ -330,8 +335,18 @@ describe("streaming compatibility proxy", () => {
 			upstreamPeer,
 			JSON.stringify(wsRequest),
 		);
+		const expectedWsRequest: Record<string, unknown> = { ...wsRequest };
+		for (const field of [
+			"max_completion_tokens",
+			"max_output_tokens",
+			"maxOutputTokens",
+			"max_tokens",
+			"context_management",
+		]) {
+			delete expectedWsRequest[field];
+		}
 		expect(JSON.parse(String(upstreamMessage))).toEqual({
-			...wsRequest,
+			...expectedWsRequest,
 			store: false,
 			input: [
 				{ ...wsRequest.input[0], role: "developer" },
