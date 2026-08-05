@@ -9,7 +9,6 @@ export interface AdaptedCompletionRequest extends AdaptedChatRequest {
 
 export function completionRequestToResponses(
 	input: JsonObject,
-	headers?: Headers,
 ): AdaptedCompletionRequest {
 	const model = requireString(input.model, "model");
 	const prompt = completionPrompt(input.prompt);
@@ -33,7 +32,7 @@ export function completionRequestToResponses(
 		}
 	}
 
-	const adapted = chatRequestToResponses(chatRequest, headers);
+	const adapted = chatRequestToResponses(chatRequest);
 	return {
 		...adapted,
 		echoPrefix: input.echo === true ? prompt : "",

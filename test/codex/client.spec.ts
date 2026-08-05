@@ -158,7 +158,7 @@ describe("Codex upstream bridge", () => {
 		}
 	});
 
-	it("forces parallel tool calls off for Responses Lite requests", async () => {
+	it("preserves parallel tool calls for Responses Lite requests", async () => {
 		let outboundBody: Record<string, unknown> | undefined;
 		fetchMock
 			.intercept({
@@ -191,7 +191,7 @@ describe("Codex upstream bridge", () => {
 		});
 
 		expect(response.status).toBe(200);
-		expect(outboundBody?.parallel_tool_calls).toBe(false);
+		expect(outboundBody?.parallel_tool_calls).toBe(true);
 	});
 
 	it("proxies Codex remote compaction as a unary JSON request", async () => {

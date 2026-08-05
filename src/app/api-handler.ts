@@ -69,7 +69,7 @@ async function handleModels(request: Request, url: URL, env: Env): Promise<Respo
 
 async function handleResponses(request: Request, env: Env): Promise<Response> {
 	const input = await parseJsonBody(request);
-	const upstream = await sendPreparedResponses(prepareResponsesRequest(input, request.headers), env, requestOptions(request));
+	const upstream = await sendPreparedResponses(prepareResponsesRequest(input), env, requestOptions(request));
 	return upstream.ok ? codexSseResponse(upstream) : upstreamErrorResponse(upstream);
 }
 
@@ -80,7 +80,7 @@ async function handleCompact(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleChatCompletions(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-	const adapted = chatRequestToResponses(await parseJsonBody(request), request.headers);
+	const adapted = chatRequestToResponses(await parseJsonBody(request));
 	const upstream = await sendPreparedResponses(adapted.body, env, requestOptions(request));
 	if (!upstream.ok) return upstreamErrorResponse(upstream);
 	const body = requireBody(upstream);
@@ -101,7 +101,6 @@ async function handleCompletions(
 ): Promise<Response> {
 	const adapted = completionRequestToResponses(
 		await parseJsonBody(request),
-		request.headers,
 	);
 	const upstream = await sendPreparedResponses(
 		adapted.body,

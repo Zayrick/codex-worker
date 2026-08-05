@@ -64,10 +64,10 @@ describe("request adaptation", () => {
 			prompt_cache_key: "cache-key",
 			store: false,
 			stream: true,
-			parallel_tool_calls: true,
+			parallel_tool_calls: false,
 			include: ["reasoning.encrypted_content"],
-			tools: [{ type: "web_search" }],
-			tool_choice: { type: "web_search" },
+			tools: [{ type: "web_search_preview" }],
+			tool_choice: { type: "web_search_preview_2025_03_11" },
 		});
 		expect(body.input).toEqual([
 			{
@@ -118,7 +118,7 @@ describe("request adaptation", () => {
 		expect(body).not.toHaveProperty("parallel_tool_calls");
 	});
 
-	it("keeps parallel tool calls only for non-empty tools", () => {
+	it("preserves parallel tool calls regardless of the tool list", () => {
 		const withoutTools = prepareResponsesRequest({
 			model: "gpt-5.6-luna",
 			input: "hello",
@@ -128,6 +128,7 @@ describe("request adaptation", () => {
 			model: "gpt-5.6-luna",
 			input: "hello",
 			tools: [],
+			parallel_tool_calls: true,
 		});
 		const withTools = prepareResponsesRequest({
 			model: "gpt-5.6-luna",
@@ -136,34 +137,26 @@ describe("request adaptation", () => {
 			parallel_tool_calls: false,
 		});
 
-		expect(withoutTools).not.toHaveProperty("parallel_tool_calls");
-		expect(withEmptyTools).not.toHaveProperty("parallel_tool_calls");
-		expect(withTools.parallel_tool_calls).toBe(true);
+		expect(withoutTools.parallel_tool_calls).toBe(false);
+		expect(withEmptyTools.parallel_tool_calls).toBe(true);
+		expect(withTools.parallel_tool_calls).toBe(false);
 	});
 
 	it.each([
-		["metadata boolean", { ws_request_header_x_openai_internal_codex_responses_lite: true }, undefined],
-		["metadata string", { ws_request_header_x_openai_internal_codex_responses_lite: " TRUE " }, undefined],
-		[
-			"request header",
-			undefined,
-			new Headers({
-				"X-OpenAI-Internal-Codex-Responses-Lite": " TRUE ",
-			}),
-		],
-	] as const)("forces parallel tool calls off for Responses Lite via %s", (_name, clientMetadata, headers) => {
-		const body = prepareResponsesRequest(
-			{
-				model: "gpt-5.6-luna",
-				input: "hello",
-				...(clientMetadata ? { client_metadata: clientMetadata } : {}),
-				tools: [{ type: "function", name: "lookup" }],
-				parallel_tool_calls: true,
+		["boolean", true],
+		["string", " TRUE "],
+	] as const)("preserves parallel tool calls with Responses Lite metadata as a %s", (_name, liteValue) => {
+		const body = prepareResponsesRequest({
+			model: "gpt-5.6-luna",
+			input: "hello",
+			client_metadata: {
+				ws_request_header_x_openai_internal_codex_responses_lite: liteValue,
 			},
-			headers,
-		);
+			tools: [{ type: "function", name: "lookup" }],
+			parallel_tool_calls: true,
+		});
 
-		expect(body.parallel_tool_calls).toBe(false);
+		expect(body.parallel_tool_calls).toBe(true);
 	});
 
 	it("adds a missing reasoning effort without replacing other reasoning fields", () => {
@@ -183,6 +176,7 @@ describe("request adaptation", () => {
 		const adapted = chatRequestToResponses({
 			model: "gpt-5.6-lunar",
 			reasoning_effort: "low",
+			parallel_tool_calls: false,
 			max_completion_tokens: 32,
 			temperature: 0.7,
 			top_p: 0.9,
@@ -237,7 +231,7 @@ describe("request adaptation", () => {
 			reasoning: { effort: "low" },
 			store: false,
 			stream: true,
-			parallel_tool_calls: true,
+			parallel_tool_calls: false,
 			include: ["reasoning.encrypted_content"],
 		});
 		expect(adapted.body).not.toHaveProperty("tool_choice");
@@ -385,7 +379,7 @@ describe("request adaptation", () => {
 				description: "Apply a patch",
 				format: { type: "text" },
 			},
-			{ type: "web_search" },
+			{ type: "web_search_preview" },
 			{
 				type: "function",
 				name: "lookup",
@@ -545,7 +539,7 @@ describe("request adaptation", () => {
 				},
 			],
 			instructions: "retain decisions",
-			tools: [{ type: "web_search" }],
+			tools: [{ type: "web_search_preview" }],
 			parallel_tool_calls: false,
 			reasoning: { effort: "high" },
 			service_tier: "priority",

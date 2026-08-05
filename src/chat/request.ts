@@ -5,7 +5,7 @@ import { messageToResponseItems } from "./content";
 import { adaptToolChoice, adaptTools } from "./tools";
 import type { AdaptedChatRequest, ToolKind } from "./types";
 
-export function chatRequestToResponses(input: JsonObject, headers?: Headers): AdaptedChatRequest {
+export function chatRequestToResponses(input: JsonObject): AdaptedChatRequest {
 	const model = requireString(input.model, "model");
 	const messages = input.messages;
 	if (!Array.isArray(messages)) {
@@ -30,6 +30,9 @@ export function chatRequestToResponses(input: JsonObject, headers?: Headers): Ad
 
 	if (tools.items.length > 0) {
 		body.tools = tools.items;
+	}
+	if (input.parallel_tool_calls !== undefined) {
+		body.parallel_tool_calls = input.parallel_tool_calls;
 	}
 	if (input.tool_choice !== undefined) {
 		body.tool_choice = adaptToolChoice(input.tool_choice, tools.customNames);
@@ -64,7 +67,7 @@ export function chatRequestToResponses(input: JsonObject, headers?: Headers): Ad
 	const stream = input.stream === true;
 	const streamOptions = isRecord(input.stream_options) ? input.stream_options : undefined;
 	return {
-		body: prepareCodexRequestBody(body, headers),
+		body: prepareCodexRequestBody(body),
 		model,
 		stream,
 		includeUsage: streamOptions?.include_usage === true,
