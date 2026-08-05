@@ -86,7 +86,7 @@ describe("encrypted OAuth storage", () => {
 		for (const sensitive of [
 			"iv-marker",
 			"ciphertext-marker",
-			env.OAUTH_MASTER_KEY,
+			env.DATA_ENCRYPTION_KEY,
 			CLIENT_API_KEY,
 		]) {
 			expect(body).not.toContain(sensitive);

@@ -10,9 +10,10 @@ src/
 ├── app/                     路由匹配与用例编排
 │   ├── fetch-handler.ts
 │   ├── api-handler.ts
-│   ├── device-handler.ts
+│   ├── admin-handler.ts
 │   └── scheduled-handler.ts
 ├── auth/                    下游 API key 与上游 OAuth
+│   ├── admin-session.ts
 │   ├── api-key.ts
 │   ├── constant-time.ts
 │   ├── credentials.ts
@@ -46,9 +47,9 @@ src/
 │   └── stream.ts
 ├── live/                    Realtime bootstrap 的有限请求适配
 │   └── request.ts
-├── http/                    HTTP/SSE 表示与设备登录 HTML
+├── http/                    HTTP/SSE 表示与管理面板 HTML
 │   ├── body.ts
-│   ├── device-page.ts
+│   ├── admin-page.ts
 │   ├── response.ts
 │   └── sse-encoder.ts
 ├── openai/                  OpenAI 兼容输出表示
@@ -64,11 +65,12 @@ src/
 
 ```text
 test/
+├── app/admin-handler.spec.ts
 ├── app/fetch-handler.spec.ts
 ├── app/proxy-handler.spec.ts
 ├── auth/
+│   ├── admin-session.spec.ts
 │   ├── api-key.spec.ts
-│   ├── device-flow.spec.ts
 │   ├── envelope.spec.ts
 │   └── refresh.spec.ts
 ├── chat/
@@ -92,7 +94,7 @@ chat → http SSE encoder
 completions → chat / http SSE encoder
 codex proxy → live request adapter
 codex client → auth credentials
-http device-page ── type only ─→ auth device-flow
+http admin-page → http response
 ```
 
 - `index.ts` 只组合 Workers handlers，不放业务规则。
@@ -110,7 +112,7 @@ OpenAI API 请求：
 ```text
 fetch-handler
   → 精确路由匹配
-  → API-* 鉴权
+  → API_KEYS 解密与启用 Key 鉴权
   → api-handler
   → 有界 JSON 解码 / 请求策略转换
   → Codex client
@@ -122,21 +124,22 @@ fetch-handler
 ```text
 fetch-handler
   → 路径族与方法匹配
-  → API-* 鉴权
+  → API_KEYS 解密与启用 Key 鉴权
   → codex/proxy
   → 清理客户端/边界 header、写入 OAuth
   → relay（流式正文或 Response.webSocket 直接交接）
 ```
 
-OAuth 设备登录：
+管理面板与 OAuth 设备登录：
 
 ```text
-device-handler
-  → 设备管理口令恒定时间校验
-  → device-flow
-  → oauth-provider
-  → AES-GCM state / credentials
-  → KV
+fetch-handler
+  → ADMIN_PATH 精确路由
+  → ADMIN_SECRET / AES-GCM HttpOnly 会话
+  → 同源写请求校验
+  → admin-handler
+      ├── API_KEYS CRUD → AES-GCM → KV
+      └── device-flow → oauth-provider → AES-GCM state / credentials → KV
 ```
 
 定时刷新：
@@ -147,20 +150,17 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
 
 ## 稳定契约
 
-- 未匹配路由、不支持的方法、无效客户端 key 和无效设备 secret 均返回无正文、无 CORS
-  的 `404`。
-- 只有已确认的 API/设备路由响应会添加 CORS；已知 API 路径族支持无鉴权的
-  `OPTIONS` 预检，未知路径仍隐藏为 `404`。
+- 未匹配路由、不支持的方法和无效客户端 key 均返回无正文、无 CORS 的 `404`。
+- 只有已确认的公开 API 响应会添加 CORS；已知 API 路径族支持无鉴权的 `OPTIONS`
+  预检。管理路由不添加 CORS，并要求 Cookie 会话及同源写请求。
 - Worker 生成的错误使用统一 OpenAI error envelope；已鉴权请求的上游错误保持状态与
   正文。结构化 API 使用最小响应头 allowlist；透明代理使用 denylist 删除 cookie、
   hop-by-hop、Cloudflare 和内部服务 header，同时保留媒体/范围/WebSocket 所需 header。
 - 需要解析的 JSON 请求编码体与 zstd 解码结果均限制为 4 MiB；OAuth 和模型目录使用
   更小的专用上限。透明代理只流式转交正文，不套用 4 MiB JSON 上限。
-- OAuth credentials 与设备 state 的 AES-GCM purpose string 和 envelope schema 是
-  持久化兼容契约，不可随意修改。
-- `OAUTH_MASTER_KEY` 只用于加密，`DEVICE_AUTH_SECRET` 只在设备表单 POST body 中
-  传输；任何长期 secret 都不得进入 URL。relay 是显式的高信任边界，不提供公共
-  默认地址。
+- OAuth credentials、API_KEYS、设备 state 与管理会话分别使用独立 AES-GCM purpose
+  string。`DATA_ENCRYPTION_KEY` 只负责加密；`ADMIN_SECRET` 只在登录表单 POST body 中
+  传输。长期 secret 不得进入 URL；`ADMIN_PATH` 只是额外隐藏层，不能替代管理密钥。
 - 所有 OAuth provider 请求叠加固定 10 秒超时；`enable_request_signal` 让客户端
   断开也能沿显式 `AbortSignal` 取消对应的上游子请求。
 - Chat JSON 与 SSE 共用同一事件 reducer，避免两种输出模式解释同一 Codex 事件时
@@ -171,8 +171,8 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
   prompt、`text_completion` envelope 和 SSE chunk，避免维护第二套 Codex 事件解释器。
 - 透明代理的“传输兼容”不等于上游“协议兼容”；Codex 原生路径映射、供应商路径分流、
   WebSocket 直交和 Realtime 媒体面边界以 `docs/compatibility.md` 为准。
-- KV 的设备登录检查后写入不是原子事务，API key 鉴权也按设计扫描少量 `API-*`；
-  需要并发排他或大量 key 时，分别迁移到 Durable Object/D1 与摘要寻址模型。
+- KV 的设备登录检查后写入和 `API_KEYS` 读改写都不是原子事务；面板面向低频、单管理
+  员配置。需要并发排他或事务语义时迁移到 Durable Object/D1。
 
 ## 修改准则
 

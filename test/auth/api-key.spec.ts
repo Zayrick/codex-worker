@@ -1,20 +1,15 @@
 import { env } from "cloudflare:workers";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	afterAll,
-	afterEach,
-	beforeAll,
-	beforeEach,
-	describe,
-	expect,
-	it,
-	vi,
-} from "vitest";
-import { authenticateClient } from "../../src/auth/api-key";
+	authenticateClient,
+	createApiKey,
+	deleteApiKey,
+	readApiKeys,
+	storeApiKeys,
+	updateApiKey,
+} from "../../src/auth/api-key";
 import { constantTimeEqual } from "../../src/auth/constant-time";
-import { storeOAuthCredentials } from "../../src/auth/credentials";
-import { fetchMock } from "../support/fetch-mock";
 import {
-	baseCredentials,
 	CLIENT_API_KEY,
 	clientFetch,
 	expectEmptyResponse,
@@ -22,91 +17,119 @@ import {
 	seedClientApiKeys,
 } from "../support/auth-fixture";
 
-beforeAll(async () => {
-	fetchMock.install();
+const THIRD_API_KEY = `sk-${"d".repeat(64)}`;
+const FOURTH_API_KEY = `sk-${"e".repeat(64)}`;
+
+beforeEach(async () => {
 	await seedClientApiKeys();
 });
 
-beforeEach(async () => {
-	await storeOAuthCredentials(env, baseCredentials());
-});
+describe("encrypted API_KEYS authentication", () => {
+	it("reads one encrypted KV value without listing key names", async () => {
+		const encrypted = await env.AUTH_KV.get("API_KEYS");
+		expect(encrypted).not.toBeNull();
+		expect(encrypted).not.toContain(CLIENT_API_KEY);
+		expect(encrypted).not.toContain(OTHER_API_KEY);
+		expect(JSON.parse(encrypted!)).toMatchObject({ v: 1, alg: "A256GCM" });
 
-afterEach(() => {
-	fetchMock.verify();
-	vi.restoreAllMocks();
-});
-
-afterAll(() => {
-	fetchMock.restore();
-});
-
-describe("API-* value authentication", () => {
-	it("lists API-* labels and matches their opaque values across pages", async () => {
-		const list = vi
-			.fn()
-			.mockResolvedValueOnce({
-				keys: [{ name: "API-first" }],
-				list_complete: false,
-				cursor: "next-page",
-			})
-			.mockResolvedValueOnce({
-				keys: [{ name: "API-second" }],
-				list_complete: true,
-				cursor: "",
-			});
-		const get = vi
-			.fn()
-			.mockResolvedValueOnce(new Map([["API-first", OTHER_API_KEY]]))
-			.mockResolvedValueOnce(new Map([["API-second", CLIENT_API_KEY]]));
-
+		const get = vi.fn().mockResolvedValue(encrypted);
+		const list = vi.fn(() => {
+			throw new Error("KV list must not be called.");
+		});
 		await authenticateClient(
 			new Request("https://example.com/v1/models", {
 				headers: { Authorization: `Bearer ${CLIENT_API_KEY}` },
 			}),
 			{
-				AUTH_KV: { list, get } as unknown as KVNamespace,
+				AUTH_KV: { get, list } as unknown as KVNamespace,
+				DATA_ENCRYPTION_KEY: env.DATA_ENCRYPTION_KEY,
 			},
 		);
 
-		expect(list).toHaveBeenNthCalledWith(1, { prefix: "API-" });
-		expect(list).toHaveBeenNthCalledWith(2, {
-			prefix: "API-",
-			cursor: "next-page",
-		});
-		expect(get).toHaveBeenNthCalledWith(1, ["API-first"], {
+		expect(get).toHaveBeenCalledOnce();
+		expect(get).toHaveBeenCalledWith("API_KEYS", {
 			type: "text",
 			cacheTtl: 30,
 		});
-		expect(get).toHaveBeenNthCalledWith(2, ["API-second"], {
-			type: "text",
-			cacheTtl: 30,
-		});
+		expect(list).not.toHaveBeenCalled();
 	});
 
-	it("uses a constant-time comparison and rejects wrong or unknown keys", async () => {
+	it("accepts only enabled keys and keeps constant-time value comparison", async () => {
 		expect(await constantTimeEqual(CLIENT_API_KEY, CLIENT_API_KEY)).toBe(true);
-		expect(
-			await constantTimeEqual(
-				CLIENT_API_KEY,
-				"sk-test-wrong-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
-			),
-		).toBe(false);
+		expect(await constantTimeEqual(CLIENT_API_KEY, OTHER_API_KEY)).toBe(false);
 
-		const wrong = await clientFetch(
-			"/v1/models",
-			undefined,
-			"sk-test-wrong-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
-		);
-		await expectEmptyResponse(wrong, 404);
-		const missing = await clientFetch(
-			"/v1/models",
-			undefined,
-			"sk-test-missing-EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
-		);
-		await expectEmptyResponse(missing, 404);
+		await storeApiKeys(env, [
+			{ name: "disabled", key: CLIENT_API_KEY, enabled: false },
+			{ name: "enabled", key: OTHER_API_KEY, enabled: true },
+		]);
+		await expect(
+			authenticateClient(
+				new Request("https://example.com/v1/models", {
+					headers: { Authorization: `Bearer ${CLIENT_API_KEY}` },
+				}),
+				env,
+			),
+		).rejects.toMatchObject({ code: "invalid_api_key" });
+		await expect(
+			authenticateClient(
+				new Request("https://example.com/v1/models", {
+					headers: { Authorization: `Bearer ${OTHER_API_KEY}` },
+				}),
+				env,
+			),
+		).resolves.toBeUndefined();
 	});
 
-	it("accepts SDK API-key headers and gives a valid Bearer token precedence", async () => {
+	it("creates, updates, and deletes validated records", async () => {
+		let keys = await createApiKey(env, {
+			name: " third ",
+			key: THIRD_API_KEY,
+			enabled: true,
+		});
+		expect(keys).toContainEqual({
+			name: "third",
+			key: THIRD_API_KEY,
+			enabled: true,
+		});
+
+		keys = await updateApiKey(env, "third", {
+			name: "renamed",
+			key: FOURTH_API_KEY,
+			enabled: false,
+		});
+		expect(keys).toContainEqual({
+			name: "renamed",
+			key: FOURTH_API_KEY,
+			enabled: false,
+		});
+		expect(keys).not.toContainEqual(expect.objectContaining({ name: "third" }));
+
+		keys = await deleteApiKey(env, "renamed");
+		expect(keys).not.toContainEqual(expect.objectContaining({ name: "renamed" }));
+		expect(await readApiKeys(env)).toEqual(keys);
+	});
+
+	it("rejects malformed and duplicate records", async () => {
+		await expect(
+			createApiKey(env, { name: "bad", key: "sk-short", enabled: true }),
+		).rejects.toMatchObject({ code: "invalid_api_key_record" });
+		await expect(
+			createApiKey(env, {
+				name: "primary",
+				key: THIRD_API_KEY,
+				enabled: true,
+			}),
+		).rejects.toMatchObject({ code: "api_key_conflict" });
+		await expect(
+			createApiKey(env, {
+				name: "duplicate-value",
+				key: CLIENT_API_KEY,
+				enabled: true,
+			}),
+		).rejects.toMatchObject({ code: "api_key_conflict" });
+	});
+
+	it("accepts SDK headers and gives Bearer precedence", async () => {
 		await expect(
 			authenticateClient(
 				new Request("https://example.com/v1/models", {
@@ -115,7 +138,6 @@ describe("API-* value authentication", () => {
 				env,
 			),
 		).resolves.toBeUndefined();
-
 		await expect(
 			authenticateClient(
 				new Request("https://example.com/v1beta/models", {
@@ -124,7 +146,6 @@ describe("API-* value authentication", () => {
 				env,
 			),
 		).resolves.toBeUndefined();
-
 		await expect(
 			authenticateClient(
 				new Request("https://example.com/v1/models", {
@@ -136,18 +157,22 @@ describe("API-* value authentication", () => {
 				env,
 			),
 		).resolves.toBeUndefined();
-
 		await expect(
 			authenticateClient(
 				new Request("https://example.com/v1/models", {
 					headers: {
-						Authorization:
-							"Bearer sk-test-wrong-DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+						Authorization: `Bearer ${THIRD_API_KEY}`,
 						"X-Api-Key": CLIENT_API_KEY,
 					},
 				}),
 				env,
 			),
 		).rejects.toMatchObject({ code: "invalid_api_key" });
+	});
+
+	it("hides wrong or unknown client keys behind an empty 404", async () => {
+		for (const key of [THIRD_API_KEY, FOURTH_API_KEY]) {
+			await expectEmptyResponse(await clientFetch("/v1/models", undefined, key), 404);
+		}
 	});
 });

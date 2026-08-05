@@ -188,7 +188,7 @@ describe("scheduled token refresh and redaction", () => {
 				message: [
 					ACCESS_TOKEN,
 					"refresh-test",
-					env.OAUTH_MASTER_KEY,
+					env.DATA_ENCRYPTION_KEY,
 					raw.iv,
 					raw.ciphertext,
 				].join(" "),
@@ -231,7 +231,7 @@ describe("scheduled token refresh and redaction", () => {
 				[
 					ACCESS_TOKEN,
 					"refresh-test",
-					env.OAUTH_MASTER_KEY,
+					env.DATA_ENCRYPTION_KEY,
 					raw.iv,
 					raw.ciphertext,
 				].join(" "),
@@ -245,7 +245,7 @@ describe("scheduled token refresh and redaction", () => {
 		for (const sensitive of [
 			ACCESS_TOKEN,
 			"refresh-test",
-			env.OAUTH_MASTER_KEY,
+			env.DATA_ENCRYPTION_KEY,
 			raw.iv,
 			raw.ciphertext,
 		]) {

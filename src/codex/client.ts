@@ -13,7 +13,7 @@ const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
 
 type CodexEnv = Pick<
 	Env,
-	"AUTH_KV" | "OAUTH_MASTER_KEY" | "CODEX_RELAY_URL"
+	"AUTH_KV" | "DATA_ENCRYPTION_KEY" | "CODEX_RELAY_URL"
 >;
 
 interface CodexRequestOptions {

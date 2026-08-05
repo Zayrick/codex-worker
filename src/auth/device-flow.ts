@@ -2,6 +2,7 @@ import {
 	credentialsFromTokenResponse,
 	requireOAuthUnconfigured,
 	storeOAuthCredentials,
+	type StoredOAuthCredentials,
 } from "./credentials";
 import { openJson, sealJson } from "./envelope";
 import {
@@ -16,7 +17,7 @@ const DEVICE_STATE_PURPOSE = "codex-worker/device-state/v1";
 const DEVICE_LIFETIME_MS = 15 * 60 * 1000;
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 
-type OAuthEnv = Pick<Env, "AUTH_KV" | "OAUTH_MASTER_KEY">;
+type OAuthEnv = Pick<Env, "AUTH_KV" | "DATA_ENCRYPTION_KEY">;
 
 interface DeviceState {
 	version: 1;
@@ -36,7 +37,7 @@ export interface DeviceAuthorization {
 
 export type DevicePollResult =
 	| { status: "pending"; retryAfter: number }
-	| { status: "stored" };
+	| { status: "stored"; credentials: StoredOAuthCredentials };
 
 export async function startDeviceAuthorization(
 	env: OAuthEnv,
@@ -56,7 +57,7 @@ export async function startDeviceAuthorization(
 				expiresAt,
 				interval,
 			} satisfies DeviceState,
-			env.OAUTH_MASTER_KEY,
+			env.DATA_ENCRYPTION_KEY,
 			DEVICE_STATE_PURPOSE,
 		);
 	} catch {
@@ -83,7 +84,7 @@ export async function pollDeviceAuthorization(
 	signal?: AbortSignal,
 ): Promise<DevicePollResult> {
 	await requireOAuthUnconfigured(env);
-	const state = await deviceState(sealedState, env.OAUTH_MASTER_KEY);
+	const state = await deviceState(sealedState, env.DATA_ENCRYPTION_KEY);
 	if (state.expiresAt <= Date.now()) {
 		throw new ApiError(
 			410,
@@ -108,7 +109,7 @@ export async function pollDeviceAuthorization(
 	);
 	await requireOAuthUnconfigured(env);
 	await storeOAuthCredentials(env, credentials);
-	return { status: "stored" };
+	return { status: "stored", credentials };
 }
 
 async function deviceState(

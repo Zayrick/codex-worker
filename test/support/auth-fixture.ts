@@ -1,11 +1,10 @@
 import { env, exports } from "cloudflare:workers";
 import { expect } from "vitest";
+import { storeApiKeys } from "../../src/auth/api-key";
 import type { StoredOAuthCredentials } from "../../src/auth/credentials";
 
-export const CLIENT_API_KEY =
-	"sk-test-client-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
-export const OTHER_API_KEY =
-	"sk-test-other-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+export const CLIENT_API_KEY = `sk-${"b".repeat(64)}`;
+export const OTHER_API_KEY = `sk-${"c".repeat(64)}`;
 
 export const ACCESS_TOKEN = jwt({ exp: 4_102_444_800 });
 export const ID_TOKEN = jwt({
@@ -16,9 +15,9 @@ export const ID_TOKEN = jwt({
 });
 
 export async function seedClientApiKeys(): Promise<void> {
-	await Promise.all([
-		env.AUTH_KV.put("API-secondary", OTHER_API_KEY),
-		env.AUTH_KV.put("API-primary", CLIENT_API_KEY),
+	await storeApiKeys(env, [
+		{ name: "secondary", key: OTHER_API_KEY, enabled: true },
+		{ name: "primary", key: CLIENT_API_KEY, enabled: true },
 	]);
 }
 
@@ -29,6 +28,7 @@ export function baseCredentials(): StoredOAuthCredentials {
 		refreshToken: "refresh-test",
 		idToken: ID_TOKEN,
 		accountId: "account-test",
+		email: "test@example.com",
 		expiresAt: 4_102_444_800_000,
 		updatedAt: "2026-07-31T00:00:00.000Z",
 	};

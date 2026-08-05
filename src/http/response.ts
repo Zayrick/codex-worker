@@ -83,15 +83,20 @@ export function jsonResponse(value: unknown, status = 200): Response {
 	});
 }
 
-export function htmlResponse(body: string, status = 200): Response {
+export function htmlResponse(
+	body: string,
+	status = 200,
+	nonce?: string,
+): Response {
+	const scriptSource = nonce ? `'nonce-${nonce}'` : "'none'";
+	const styleSource = nonce ? `'nonce-${nonce}'` : "'none'";
 	return new Response(body, {
 		status,
 		headers: {
 			"Content-Type": "text/html; charset=utf-8",
 			"Cache-Control": "no-store",
-			"Content-Security-Policy":
-				"default-src 'none'; script-src 'unsafe-inline'; frame-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'self'",
-			"Referrer-Policy": "no-referrer",
+			"Content-Security-Policy": `default-src 'none'; script-src ${scriptSource}; style-src ${styleSource}; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
+			"Referrer-Policy": "same-origin",
 			"X-Content-Type-Options": "nosniff",
 			"X-Frame-Options": "SAMEORIGIN",
 		},

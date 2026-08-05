@@ -11,7 +11,7 @@
 
 ## 路由矩阵
 
-除 `OPTIONS` 外，下表中的请求都需要有效的下游 `API-*` key。透明路由接受
+除 `OPTIONS` 外，下表中的请求都需要 `API_KEYS` 加密记录中已启用的下游 Key。透明路由接受
 `GET`、`HEAD`、`POST`、`PUT`、`PATCH` 和 `DELETE`；`CONNECT` 不开放。
 
 | 客户端路径 | 级别 | Worker 行为与边界 |
@@ -24,7 +24,7 @@
 | `GET /v1/responses` + `Upgrade: websocket` | Codex 原生映射 | 将 Responses WebSocket 握手和后续帧直接交给上游；不做帧级协议转换。 |
 | `/v1/images/generations`、`/v1/images/edits` | Codex 原生映射 | 映射到 `/backend-api/codex/images/*`。JSON、multipart 图片上传、SSE/JSON/二进制下载都按流处理；其他 `/v1/images/*` 动作是否存在由上游决定。 |
 | `/v1/videos/*` | 传输透传 | 方法、查询参数、正文和流式响应转交同源 relay。参考项目中的视频执行器是供应商专用实现；本 Worker 不把 Codex Responses 翻译成视频 API。 |
-| `/openai/v1/videos/*` | 传输透传 | 保留参考项目的 OpenAI Videos 别名，包括创建、轮询和 `/content` 下载。 |
+| `/openai/v1/videos/*` | 传输透传 | 提供 OpenAI Videos 别名，包括创建、轮询和 `/content` 下载。 |
 | `/v1/messages`、`/v1/messages/count_tokens` | 传输透传 | 提供 Anthropic 风格路径和请求头传输，不进行 Messages ↔ Responses 的结构转换。relay 必须实现目标协议。 |
 | `POST /v1/alpha/search` | Codex 原生映射 | 映射到 `/backend-api/codex/alpha/search`。 |
 | `POST /v1/live` | Codex 原生映射 | 映射到 `/backend-api/codex/realtime/calls`；缺少时补 `intent=quicksilver` 与 `architecture=avas`。标准 multipart `sdp + session` 会转为 Codex JSON。 |
@@ -32,7 +32,7 @@
 | `POST /v1/realtime/calls` | Codex 原生映射 | 与 `/v1/live` 使用同一 bootstrap 映射、multipart 适配和默认查询参数。 |
 | `/v1/realtime`、`/v1/realtime/*` | 传输透传 | 支持普通 HTTP 与 WebSocket Upgrade；Worker 不转换 Realtime 事件。 |
 | `/v1beta/*` | 传输透传 | 覆盖 Gemini 风格 models、interactions 及其 action 路径；协议和 OAuth 语义由 relay 实现。 |
-| `/backend-api/codex/*` | Codex CLI 直连别名 | 保留路径与查询参数。`responses`、`responses/compact` 仍走本项目已有的请求策略；其他子路径透明传输。 |
+| `/backend-api/codex/*` | Codex CLI 直连别名 | 原样传输路径与查询参数。`responses`、`responses/compact` 使用本项目的请求策略；其他子路径透明传输。 |
 
 这张表表示 Worker 能做什么，不表示单一 ChatGPT OAuth 对所有供应商 API 都有权限。
 尤其是 `/v1/videos/*`、`/v1/messages*` 和 `/v1beta/*`：路由存在且传输兼容，但若
@@ -63,8 +63,8 @@ Origin/Referer、客户端提交的 ChatGPT 账户 ID、转发/IP、hop-by-hop �
 Cloudflare 内部头和 hop-by-hop 头，并强制 `Cache-Control: no-store`。
 重定向使用 `manual`，避免 OAuth 在未知重定向目标上自动重放。
 
-Live multipart 适配沿用参考实现的 16 MiB 上限。需要解析并转换的 Chat、
-Completions、Responses 和 compact JSON 仍受项目自身 4 MiB 编码体/解压体上限约束；
+Live multipart 适配的正文上限为 16 MiB。需要解析并转换的 Chat、Completions、
+Responses 和 compact JSON 受项目自身 4 MiB 编码体/解压体上限约束；
 透明图片、视频、Messages、v1beta 和别名路径不受这个
 应用层 JSON 上限约束，但仍受 Cloudflare 请求体与资源限制。
 

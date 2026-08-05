@@ -24,11 +24,17 @@ export interface StoredOAuthCredentials {
 	refreshToken: string;
 	idToken?: string;
 	accountId?: string;
+	email?: string;
 	expiresAt: number;
 	updatedAt: string;
 }
 
-type OAuthEnv = Pick<Env, "AUTH_KV" | "OAUTH_MASTER_KEY">;
+export interface OAuthStatus {
+	email: string | null;
+	expiresAt: number;
+}
+
+type OAuthEnv = Pick<Env, "AUTH_KV" | "DATA_ENCRYPTION_KEY">;
 
 export async function getCodexCredentials(
 	env: OAuthEnv,
@@ -84,7 +90,7 @@ export async function readOAuthCredentials(
 	try {
 		const value = await openJson(
 			encrypted,
-			env.OAUTH_MASTER_KEY,
+			env.DATA_ENCRYPTION_KEY,
 			OAUTH_ENVELOPE_PURPOSE,
 		);
 		return validateStoredCredentials(value);
@@ -102,13 +108,28 @@ export async function storeOAuthCredentials(
 	try {
 		encrypted = await sealJson(
 			validated,
-			env.OAUTH_MASTER_KEY,
+			env.DATA_ENCRYPTION_KEY,
 			OAUTH_ENVELOPE_PURPOSE,
 		);
 	} catch {
 		throw invalidStoredCredentials();
 	}
 	await env.AUTH_KV.put(OAUTH_KEY, encrypted);
+}
+
+export async function deleteOAuthCredentials(
+	env: Pick<Env, "AUTH_KV">,
+): Promise<void> {
+	await env.AUTH_KV.delete(OAUTH_KEY);
+}
+
+export function oauthStatus(
+	credentials: StoredOAuthCredentials,
+): OAuthStatus {
+	return {
+		email: credentials.email ?? null,
+		expiresAt: credentials.expiresAt,
+	};
 }
 
 export function credentialsFromTokenResponse(
@@ -127,6 +148,8 @@ export function credentialsFromTokenResponse(
 		stringField(value, "account_id") ??
 		accountIdFromToken(idToken) ??
 		previous?.accountId;
+	const email =
+		stringField(decodeJwt(idToken), "email") ?? previous?.email;
 	const expiresIn = numberField(value, "expires_in");
 	const expiresAt =
 		expiresIn !== undefined && expiresIn > 0
@@ -139,6 +162,7 @@ export function credentialsFromTokenResponse(
 		refreshToken,
 		...(idToken ? { idToken } : {}),
 		...(accountId ? { accountId } : {}),
+		...(email ? { email } : {}),
 		expiresAt,
 		updatedAt: new Date(now).toISOString(),
 	};
@@ -162,12 +186,14 @@ function validateStoredCredentials(value: unknown): StoredOAuthCredentials {
 	}
 	const idToken = stringField(value, "idToken");
 	const accountId = stringField(value, "accountId");
+	const email = stringField(value, "email");
 	return {
 		version: 1,
 		accessToken,
 		refreshToken,
 		...(idToken ? { idToken } : {}),
 		...(accountId ? { accountId } : {}),
+		...(email ? { email } : {}),
 		expiresAt,
 		updatedAt,
 	};

@@ -187,7 +187,7 @@ describe("routing and model compatibility", () => {
 		}
 	});
 
-	it("does not emulate the removed single-model catalog route", async () => {
+	it("returns 404 for unsupported model detail routes", async () => {
 		const response = await authenticatedFetch(
 			"https://example.com/v1/models/gpt-5.6-lunar",
 		);

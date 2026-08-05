@@ -7,7 +7,7 @@ import { refreshProviderToken } from "./oauth-provider";
 
 const REFRESH_WINDOW_MS = 15 * 60 * 1000;
 
-type OAuthEnv = Pick<Env, "AUTH_KV" | "OAUTH_MASTER_KEY">;
+type OAuthEnv = Pick<Env, "AUTH_KV" | "DATA_ENCRYPTION_KEY">;
 
 type OAuthRefreshResult = "missing" | "not_due" | "refreshed";
 

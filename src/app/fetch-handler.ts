@@ -6,8 +6,8 @@ import {
 } from "../codex/proxy";
 import { emptyResponse, withCors } from "../http/response";
 import { hasErrorCode, logFailure } from "../shared/logging";
+import { handleAdminRoute, matchAdminRoute } from "./admin-handler";
 import { handleApiRoute, type ApiRoute } from "./api-handler";
-import { handleDeviceRoute, type DeviceRoute } from "./device-handler";
 
 export async function handleFetch(
 	request: Request,
@@ -19,8 +19,12 @@ export async function handleFetch(
 		return healthResponse(env);
 	}
 
-	const deviceRoute = matchDeviceRoute(request.method, url.pathname);
-	if (deviceRoute) return handleDeviceRoute(deviceRoute, request, url, env);
+	const adminRoute = matchAdminRoute(
+		request.method,
+		url.pathname,
+		env.ADMIN_PATH,
+	);
+	if (adminRoute) return handleAdminRoute(adminRoute, request, url, env);
 	if (request.method === "OPTIONS" && matchApiPath(url.pathname)) {
 		return withCors(emptyResponse(204), env.CORS_ORIGIN);
 	}
@@ -71,18 +75,6 @@ function matchApiPath(pathname: string): ApiRoute | undefined {
 		default:
 			return isCodexProxyPath(pathname) ? "proxy" : undefined;
 	}
-}
-
-function matchDeviceRoute(
-	method: string,
-	pathname: string,
-): DeviceRoute | undefined {
-	if (pathname === "/auth/device/start") {
-		if (method === "GET") return "start_form";
-		if (method === "POST") return "start";
-	}
-	if (method === "GET" && pathname === "/auth/device/poll") return "poll";
-	return undefined;
 }
 
 async function apiClientAuthenticated(

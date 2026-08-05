@@ -3,9 +3,10 @@ import { defineConfig } from "vitest/config";
 
 // Deterministic, non-sensitive bindings isolate tests from local developer credentials.
 const testBindings = {
-	OAUTH_MASTER_KEY: Buffer.alloc(32, 7).toString("base64url"),
-	DEVICE_AUTH_SECRET: "test-device-secret",
+	ADMIN_PATH: "test-management-path",
+	ADMIN_SECRET: "test-admin-secret",
 	CODEX_RELAY_URL: "https://codex-relay.test/backend-api/codex/responses",
+	DATA_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64url"),
 };
 
 // Wrangler's configuration loader and the Miniflare Worker runtime use separate

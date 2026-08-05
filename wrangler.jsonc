@@ -6,10 +6,10 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "codex-worker",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-07-29",
+	"compatibility_date": "2026-07-30",
 	// Persist structured Worker logs and upload source maps for readable production traces.
 	"observability": {
-	"enabled": true
+		"enabled": true
 	},
 	"upload_source_maps": true,
 	"compatibility_flags": [
@@ -27,10 +27,15 @@
 	// Local development and deployed environments supply these sensitive bindings as secrets.
 	// Required names support configuration validation and generated Env types.
 	"secrets": {
-		"required": ["CODEX_RELAY_URL", "DEVICE_AUTH_SECRET", "OAUTH_MASTER_KEY"]
+		"required": [
+			"ADMIN_PATH",
+			"ADMIN_SECRET",
+			"CODEX_RELAY_URL",
+			"DATA_ENCRYPTION_KEY"
+		]
 	},
 
-	// Stores opaque API-key records and the encrypted OAuth credential envelope.
+	// Stores encrypted API-key and OAuth credential envelopes.
 	"kv_namespaces": [
 		{
 			"binding": "AUTH_KV"
