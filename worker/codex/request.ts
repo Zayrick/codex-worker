@@ -7,6 +7,7 @@ import {
 } from "./request-policy";
 
 const adaptResponseCreateBody = composeRequestBodyPolicies(
+	normalizeStringResponseInput,
 	rewriteSystemMessageRoles,
 	applyResponseCreateEgressPolicy,
 );
@@ -63,6 +64,20 @@ export function adaptResponsesWebSocketMessage(message: string): string {
 
 export function toCodexMessageRole(role: string): string {
 	return role === "system" ? "developer" : role;
+}
+
+function normalizeStringResponseInput(body: JsonObject): JsonObject {
+	if (typeof body.input !== "string") return body;
+	return {
+		...body,
+		input: [
+			{
+				type: "message",
+				role: "user",
+				content: [{ type: "input_text", text: body.input }],
+			},
+		],
+	};
 }
 
 function rewriteSystemMessageRoles(body: JsonObject): JsonObject {

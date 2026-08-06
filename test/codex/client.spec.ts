@@ -180,6 +180,36 @@ describe("Codex upstream bridge", () => {
 		});
 	});
 
+	it("wraps string Responses input as a user message array", async () => {
+		const requestPayload = {
+			model: "gpt-5.6-luna",
+			input: "Hi",
+			stream: false,
+		};
+		mockCodex(sseResponse(), (body) => {
+			expect(body).toEqual({
+				...requestPayload,
+				store: false,
+				input: [
+					{
+						type: "message",
+						role: "user",
+						content: [{ type: "input_text", text: "Hi" }],
+					},
+				],
+			});
+		});
+
+		const response = await authenticatedFetch("https://example.com/v1/responses", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(requestPayload),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe(sseResponse());
+	});
+
 	it("rewrites compact system messages without changing other fields", async () => {
 		let outbound:
 			| {
@@ -291,7 +321,13 @@ describe("Codex upstream bridge", () => {
 			Buffer.from(
 				JSON.stringify({
 					model: "gpt-5.6-luna",
-					input: "compressed Codex request",
+					input: [
+						{
+							type: "message",
+							role: "user",
+							content: "compressed Codex request",
+						},
+					],
 					store: false,
 					prompt_cache_key: "compressed-cache-key",
 				}),

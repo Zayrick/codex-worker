@@ -364,6 +364,29 @@ describe("streaming compatibility proxy", () => {
 			],
 		});
 
+		const stringCreateRequest = {
+			type: "response.create",
+			model: "gpt-5.6-luna",
+			input: "Hi",
+			store: true,
+		};
+		const upstreamStringCreate = await exchangeWebSocketMessage(
+			downstream,
+			upstreamPeer,
+			JSON.stringify(stringCreateRequest),
+		);
+		expect(JSON.parse(String(upstreamStringCreate))).toEqual({
+			...stringCreateRequest,
+			store: false,
+			input: [
+				{
+					type: "message",
+					role: "user",
+					content: [{ type: "input_text", text: "Hi" }],
+				},
+			],
+		});
+
 		const appendRequest = {
 			type: "response.append",
 			input: [

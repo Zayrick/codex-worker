@@ -21,7 +21,7 @@ Codex 直连别名可传输常规 HTTP 方法，`CONNECT` 一律不开放。
 | `GET /v1/models` | 协议转换 | 读取 Codex 模型目录并输出 OpenAI model list；带 `client_version` 查询参数时保留 Codex CLI 目录格式。 |
 | `POST /v1/chat/completions` | 协议转换 | Chat 请求转换为 Responses；普通响应转换为 JSON，`stream: true` 转换为 Chat SSE。 |
 | `POST /v1/completions` | 协议转换 | 旧版 prompt 转为 Responses，并输出 `text_completion` JSON/SSE。当前只支持字符串或单项字符串数组、`n=1`、`best_of=1`；不伪造多候选、token-id prompt 或完整 logprobs 语义。 |
-| `POST /v1/responses`、`POST /v1/responses/compact` | Codex 原生映射 | 路径映射到 `/backend-api/codex/responses*`，并把顶层 `input` 数组中 `role: "system"` 的项改为 `developer`。Responses 创建请求还固定 `store: false`，移除 Codex 不支持的生成参数、`context_management` 与 `user`，并只保留 `service_tier: "priority"`；compact 不应用创建参数策略。 |
+| `POST /v1/responses`、`POST /v1/responses/compact` | Codex 原生映射 | 路径映射到 `/backend-api/codex/responses*`。Responses 创建请求会把字符串顶层 `input` 包装成用户 `input_text` 消息数组；两条路径都会把数组 `input` 中 `role: "system"` 的项改为 `developer`。Responses 创建请求还固定 `store: false`，移除 Codex 不支持的生成参数、`context_management` 与 `user`，并只保留 `service_tier: "priority"`；compact 不应用创建参数策略。 |
 | `GET /v1/responses` + `Upgrade: websocket` | Codex 原生映射 | 建立双向 WebSocket 桥；`response.create` 应用 Responses 创建策略，`response.append` 只执行顶层 `input` 角色改写，其他帧保持不变。 |
 | `/v1/images/generations`、`/v1/images/edits` | Codex 原生映射 | 映射到 `/backend-api/codex/images/*`。JSON、multipart 图片上传、SSE/JSON/二进制下载都按流处理；其他 `/v1/images/*` 动作是否存在由上游决定。 |
 | `POST /v1/messages` | 协议转换 | Anthropic Messages 请求转换为 Codex Responses；非流式结果转换为 Message JSON，`stream: true` 转换为带命名事件的 Anthropic SSE。支持 system、文本、图片、文档、thinking signature、客户端工具、工具结果、Web Search 块、tool choice、thinking effort、usage、stop reason 和 Anthropic error envelope。 |
@@ -57,8 +57,9 @@ Responses 创建请求始终把 `store` 覆盖为 `false`，并在出站边界�
 `max_completion_tokens`、`max_output_tokens`、`maxOutputTokens`、`max_tokens` 和
 `context_management`，同时移除 `temperature`、`top_p`、`truncation`、`user`；
 `service_tier` 仅在严格等于 `priority` 时保留。其他未知字段不据此删除，也不会根据
-`prompt_cache_key` 等正文字段推导请求头。Responses 与 compact 都会把顶层 `input`
-消息项的 `system` 改为 `developer`。正文无需变化时会保留原始编码（包括
+`prompt_cache_key` 等正文字段推导请求头。Responses 创建请求会先把字符串顶层 `input`
+包装成单个用户 `input_text` 消息；Responses 与 compact 都会把数组 `input` 消息项的
+`system` 改为 `developer`。正文无需变化时会保留原始编码（包括
 `Content-Encoding: zstd`）；需要改写时则重新编码为 JSON。
 
 旧版 Completions 当前实际解释 `model`、`prompt`、`stream`、`echo`、`n`、`best_of`，
@@ -104,8 +105,8 @@ Cloudflare 请求体与资源限制。
 `fetch()`，再用一对本地 socket 桥接上下游。Codex 请求帧的边界如下：
 
 - 客户端文本帧为有效的 `response.create` 或 `response.append` JSON 时视为 Responses
-  请求；Worker 保留事件类型及其他字段，只将顶层 `input` 中的 `role: "system"`
-  改为 `developer`；
+  请求；`response.create` 的字符串 `input` 会包装成用户 `input_text` 消息数组，两种事件
+  的数组 `input` 都会把 `role: "system"` 改为 `developer`，事件类型及其他字段保留；
 - 其他客户端文本帧、所有二进制帧和全部上游帧保持原内容；
 - close code、close reason 和协商出的 `Sec-WebSocket-Protocol` 在两端转交；
 - 上游拒绝握手时，其 HTTP 状态与正文经安全响应头过滤后返回；

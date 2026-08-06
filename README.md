@@ -99,8 +99,9 @@ https://your-worker.example.com/<ADMIN_PATH>/admin
 `X-Goog-Api-Key` 的顺序选择，不会在首选值失败后回退。缺少、错误或已停用的 Key
 均返回空正文 `404`。
 
-Responses 与 compact 会检查顶层 `input`，把消息项的 `system` 角色改为 `developer`。
-Responses 创建请求还会固定 `store: false`，并移除 Codex 不支持的 `max_completion_tokens`、
+Responses 创建请求会把字符串顶层 `input` 包装成用户 `input_text` 消息数组；Responses 与
+compact 会检查数组 `input`，把消息项的 `system` 角色改为 `developer`。Responses 创建请求
+还会固定 `store: false`，并移除 Codex 不支持的 `max_completion_tokens`、
 `max_output_tokens`、`maxOutputTokens`、`max_tokens`、`context_management`、`temperature`、
 `top_p`、`truncation` 与 `user`；`service_tier` 仅在值为 `priority` 时保留，其他未知字段保留。
 Responses WebSocket 对 `response.create` 应用同一策略，`response.append` 只改写角色，其他帧
