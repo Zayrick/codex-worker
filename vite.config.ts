@@ -1,6 +1,7 @@
-import { cloudflare } from "@cloudflare/vite-plugin";
-import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+import { cloudflare } from "@cloudflare/vite-plugin";
 
 export default defineConfig({
 	html: {
@@ -8,4 +9,4 @@ export default defineConfig({
 		cspNonce: "__CODEX_WORKER_CSP_NONCE__",
 	},
 	plugins: [react(), cloudflare()],
-});
+})
