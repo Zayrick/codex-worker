@@ -51,9 +51,9 @@
 		}
 	],
 
-	// Refresh OAuth credentials every ten minutes when they are close to expiry.
+	// Refresh OAuth credentials hourly when they expire within three hours.
 	"triggers": {
-		"crons": ["*/10 * * * *"]
+		"crons": ["0 * * * *"]
 	}
 
 	/**

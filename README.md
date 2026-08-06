@@ -126,7 +126,7 @@ Messages 与 Gemini 的 token-count 路径采用本地 `cl100k_base` tokenizer �
 
 ## 部署
 
-`wrangler.jsonc` 声明自动预配的 `AUTH_KV`、四个必需 secrets 和每 10 分钟执行一次
+`wrangler.jsonc` 声明自动预配的 `AUTH_KV`、四个必需 secrets 和每小时执行一次
 的 Cron Trigger。若要绑定已有 namespace，可为 `kv_namespaces` 补充 `id`。
 
 安装依赖并登录 Cloudflare：
@@ -170,7 +170,7 @@ pnpm exec wrangler deploy --secrets-file .env.production
 
 ## OAuth 自动刷新
 
-Cron Trigger 每 10 分钟读取并解密 `oauth`。access token 距离过期不足 15 分钟时，
+Cron Trigger 每小时读取并解密 `oauth`。access token 将在 3 小时内过期时，
 Worker 使用 refresh token 请求 OpenAI token endpoint；瞬时网络错误、HTTP 429 或
 5xx 最多尝试三次，每次上游请求最长 10 秒。成功后保留账户信息，用新 IV 覆盖
 `oauth`。普通 API 请求不会主动刷新，避免多个边缘位置同时消费旋转式 refresh

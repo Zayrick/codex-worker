@@ -22,6 +22,7 @@ import {
 	refreshProviderToken,
 	requestDeviceAuthorization,
 } from "../../worker/auth/oauth-provider";
+import { refreshOAuthCredentials } from "../../worker/auth/refresh";
 import worker from "../../worker/index";
 import { fetchMock } from "../support/fetch-mock";
 import {
@@ -136,7 +137,7 @@ describe("scheduled token refresh and redaction", () => {
 	it("refreshes an expiring token and re-encrypts oauth", async () => {
 		await storeOAuthCredentials(env, {
 			...baseCredentials(),
-			expiresAt: Date.now() + 60_000,
+			expiresAt: Date.now() + 3 * 60 * 60 * 1000 - 60_000,
 		});
 		let refreshForm: URLSearchParams | undefined;
 		fetchMock
@@ -163,7 +164,7 @@ describe("scheduled token refresh and redaction", () => {
 
 		const ctx = createExecutionContext();
 		await worker.scheduled(
-			createScheduledController({ cron: "*/10 * * * *" }),
+			createScheduledController({ cron: "0 * * * *" }),
 			env,
 			ctx,
 		);
@@ -176,6 +177,16 @@ describe("scheduled token refresh and redaction", () => {
 			accessToken: "refreshed-access-token",
 			refreshToken: "refreshed-refresh-token",
 		});
+	});
+
+	it("does not refresh a token that expires outside the three-hour window", async () => {
+		const now = Date.now();
+		await storeOAuthCredentials(env, {
+			...baseCredentials(),
+			expiresAt: now + 3 * 60 * 60 * 1000 + 60_000,
+		});
+
+		await expect(refreshOAuthCredentials(env, now)).resolves.toBe("not_due");
 	});
 
 	it("passes upstream credential errors through unchanged", async () => {
