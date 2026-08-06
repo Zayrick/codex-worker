@@ -11,6 +11,9 @@ export const ID_TOKEN = jwt({
 	email: "test@example.com",
 	"https://api.openai.com/auth": {
 		chatgpt_account_id: "account-test",
+		chatgpt_plan_type: "plus",
+		chatgpt_subscription_active_start: "2026-01-01T00:00:00.000Z",
+		chatgpt_subscription_active_until: 1_800_000_000,
 	},
 });
 

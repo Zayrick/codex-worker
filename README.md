@@ -54,13 +54,16 @@ https://your-worker.example.com/<ADMIN_PATH>/admin
   provider 返回的间隔轮询；
 - 已登录时，页面显示邮箱、OAuth 过期时间和退出 Codex 登录按钮；退出会删除
   `oauth` KV 记录；
+- “订阅与额度”区域从 OAuth `id_token` 读取套餐及订阅起止时间，并通过受信任 relay
+  实时请求 Codex 用量，显示 5 小时、周/月、代码审查及附加模型额度的已用/剩余比例、
+  重置时间和额度重置积分；读取失败不会影响 OAuth 与 API Key 管理；
 - 下方可以查看、添加、修改、启停和删除 API Key；“自动生成”按钮使用浏览器
   Web Crypto 生成 `sk-` 加 64 位小写字母或数字，不使用 `Math.random()`。
 
 同源管理端点位于 `/<ADMIN_PATH>/admin/*`：
 
 - `POST /login`、`POST /logout`；
-- `GET /state`；
+- `GET /state`、`GET /subscription`；
 - `POST /oauth/device`、`POST /oauth/device/poll`、`DELETE /oauth`；
 - `GET|POST|PUT|DELETE /api-keys`。
 
@@ -177,7 +180,8 @@ OAuth 与 API Key 常规读取使用最低的 `cacheTtl: 30`。Workers KV 是最
 - 测试在隔离的 Workers runtime 中使用虚拟凭据。
 
 `CODEX_RELAY_URL` 必须指向你控制并审计的 HTTPS relay。relay 会接收 OAuth Bearer、
-账户 ID、请求与响应内容，必须禁用敏感日志并限制入口。最小 Caddy 反代示例：
+账户 ID、请求与响应内容，必须禁用敏感日志并限制入口。管理面板的额度请求会从同一
+origin 访问 `/backend-api/wham/usage`；最小 Caddy 反代示例会覆盖该路径：
 
 ```caddyfile
 your-relay.example.com {

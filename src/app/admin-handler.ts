@@ -20,6 +20,10 @@ import {
 	pollDeviceAuthorization,
 	startDeviceAuthorization,
 } from "../auth/device-flow";
+import {
+	codexSubscriptionMetadata,
+	fetchCodexSubscription,
+} from "../codex/subscription";
 import { adminDashboardPage, adminLoginPage } from "../http/admin-page";
 import { jsonResponse } from "../http/response";
 import {
@@ -44,6 +48,7 @@ export type AdminRoute =
 	| "login"
 	| "logout"
 	| "state"
+	| "subscription"
 	| "oauth_start"
 	| "oauth_poll"
 	| "oauth_delete"
@@ -103,6 +108,10 @@ export async function handleAdminRoute(
 		switch (match.route) {
 			case "state":
 				return await adminState(env);
+			case "subscription":
+				return jsonResponse({
+					subscription: await fetchCodexSubscription(env, request.signal),
+				});
 			case "oauth_start":
 				return await startOAuth(request, env);
 			case "oauth_poll":
@@ -177,6 +186,9 @@ async function adminState(env: Env): Promise<Response> {
 	]);
 	return jsonResponse({
 		oauth: credentials ? oauthStatus(credentials) : null,
+		subscription: credentials
+			? codexSubscriptionMetadata(credentials)
+			: null,
 		apiKeys,
 	});
 }
@@ -196,7 +208,11 @@ async function pollOAuth(request: Request, env: Env): Promise<Response> {
 	const result = await pollDeviceAuthorization(env, sealedState, request.signal);
 	return result.status === "pending"
 		? jsonResponse(result, 202)
-		: jsonResponse({ status: "stored", oauth: oauthStatus(result.credentials) });
+		: jsonResponse({
+				status: "stored",
+				oauth: oauthStatus(result.credentials),
+				subscription: codexSubscriptionMetadata(result.credentials),
+			});
 }
 
 async function parseAdminJson(request: Request): Promise<JsonObject> {
@@ -268,6 +284,7 @@ const ADMIN_ROUTES = new Map<string, AdminRoute>([
 	["POST /login", "login"],
 	["POST /logout", "logout"],
 	["GET /state", "state"],
+	["GET /subscription", "subscription"],
 	["POST /oauth/device", "oauth_start"],
 	["POST /oauth/device/poll", "oauth_poll"],
 	["DELETE /oauth", "oauth_delete"],

@@ -17,6 +17,7 @@ import {
 } from "../../src/auth/credentials";
 import { fetchMock } from "../support/fetch-mock";
 import {
+	ACCESS_TOKEN,
 	baseCredentials,
 	expectEmptyResponse,
 	ID_TOKEN,
@@ -92,6 +93,15 @@ describe("protected management panel", () => {
 		expect(dashboard.status).toBe(200);
 		const dashboardHtml = await dashboard.text();
 		expect(dashboardHtml).toContain("Codex OAuth");
+		expect(dashboardHtml).toContain("订阅与额度");
+		expect(dashboardHtml).toContain("quota-time-dot");
+		expect(dashboardHtml).toContain("半透明圆点表示剩余时间");
+		expect(dashboardHtml).toContain(
+			"const percent = remaining / duration * 100;",
+		);
+		expect(dashboardHtml).not.toContain("时间刻度 · ");
+		expect(dashboardHtml).not.toContain("quota-meter-axis");
+		expect(dashboardHtml).toContain('request("/subscription")');
 		expect(dashboardHtml).toContain("API Keys");
 		expect(dashboardHtml).toContain("crypto.getRandomValues(bytes)");
 		expect(dashboardHtml).toContain(
@@ -116,11 +126,161 @@ describe("protected management panel", () => {
 				email: "test@example.com",
 				expiresAt: 4_102_444_800_000,
 			},
+			subscription: {
+				planType: "plus",
+				subscriptionActiveStart: Date.parse("2026-01-01T00:00:00.000Z"),
+				subscriptionActiveUntil: 1_800_000_000_000,
+			},
 			apiKeys: [
 				{ name: "primary", key: `sk-${"b".repeat(64)}`, enabled: true },
 				{ name: "secondary", key: `sk-${"c".repeat(64)}`, enabled: true },
 			],
 		});
+	});
+
+	it("fetches and normalizes Codex subscription quotas through the trusted relay", async () => {
+		const cookie = sessionCookie(await login(env.ADMIN_SECRET));
+		const startedAt = Date.now();
+		fetchMock
+			.intercept({
+				origin: "https://codex-relay.test",
+				path: "/backend-api/wham/usage",
+				method: "GET",
+			})
+			.reply(({ headers, signal }) => {
+				expect(headers.get("Authorization")).toBe(`Bearer ${ACCESS_TOKEN}`);
+				expect(headers.get("Chatgpt-Account-Id")).toBe("account-test");
+				expect(headers.get("Accept")).toBe("application/json");
+				expect(headers.get("User-Agent")).toContain("codex_cli_rs/");
+				expect(signal).toBeDefined();
+				return {
+					statusCode: 200,
+					data: JSON.stringify({
+						plan_type: "pro",
+						rate_limit: {
+							allowed: true,
+							primary_window: {
+								used_percent: 1,
+								limit_window_seconds: 604_800,
+								reset_at: 1_805_000_000,
+							},
+							secondary_window: {
+								usedPercent: "42.5",
+								limitWindowSeconds: "18000",
+								resetAfterSeconds: 3_600,
+							},
+						},
+						code_review_rate_limit: {
+							allowed: false,
+							primary_window: {
+								limit_window_seconds: 18_000,
+								reset_at: 1_805_000_100,
+							},
+						},
+						additional_rate_limits: [
+							{
+								limit_name: "GPT-5.3-Codex-Spark",
+								rate_limit: {
+									primary_window: {
+										used_percent: 9,
+										limit_window_seconds: 28 * 24 * 60 * 60,
+										reset_at: 1_806_000_000,
+									},
+								},
+							},
+						],
+						rate_limit_reset_credits: {
+							available_count: "2",
+							applicable_available_count: 1,
+						},
+					}),
+					responseOptions: {
+						headers: { "Content-Type": "application/json" },
+					},
+				};
+			});
+
+		const response = await adminFetch("/subscription", cookie);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("Cache-Control")).toBe("no-store");
+		const body = (await response.json()) as {
+			subscription: {
+				fetchedAt: number;
+				windows: Array<Record<string, unknown>>;
+			};
+		};
+		expect(body.subscription).toMatchObject({
+			planType: "pro",
+			subscriptionActiveStart: Date.parse("2026-01-01T00:00:00.000Z"),
+			subscriptionActiveUntil: 1_800_000_000_000,
+			rateLimitResetCredits: {
+				availableCount: 2,
+				applicableAvailableCount: 1,
+			},
+		});
+		expect(body.subscription.fetchedAt).toBeGreaterThanOrEqual(startedAt);
+		expect(body.subscription.windows).toHaveLength(4);
+		expect(body.subscription.windows).toEqual([
+			expect.objectContaining({
+				category: "codex",
+				kind: "five_hour",
+				usedPercent: 42.5,
+				remainingPercent: 57.5,
+				limitWindowSeconds: 18_000,
+			}),
+				expect.objectContaining({
+					category: "codex",
+					kind: "weekly",
+					usedPercent: 1,
+					remainingPercent: 99,
+					resetAt: 1_805_000_000_000,
+				}),
+			expect.objectContaining({
+				category: "code_review",
+				kind: "five_hour",
+				usedPercent: 100,
+				remainingPercent: 0,
+				limitReached: true,
+			}),
+			expect.objectContaining({
+				category: "additional",
+				name: "GPT-5.3-Codex-Spark",
+				kind: "monthly",
+				usedPercent: 9,
+				remainingPercent: 91,
+			}),
+		]);
+		const relativeReset = Number(body.subscription.windows[0]?.resetAt);
+		expect(relativeReset).toBeGreaterThanOrEqual(startedAt + 3_599_000);
+		expect(relativeReset).toBeLessThanOrEqual(Date.now() + 3_601_000);
+		expect(JSON.stringify(body)).not.toContain(ACCESS_TOKEN);
+	});
+
+	it("contains rejected subscription responses behind a safe management error", async () => {
+		const cookie = sessionCookie(await login(env.ADMIN_SECRET));
+		const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		fetchMock
+			.intercept({
+				origin: "https://codex-relay.test",
+				path: "/backend-api/wham/usage",
+				method: "GET",
+			})
+			.reply(401, `upstream secret ${ACCESS_TOKEN}`);
+
+		const response = await adminFetch("/subscription", cookie);
+		expect(response.status).toBe(502);
+		const body = await response.text();
+		expect(body).not.toContain(ACCESS_TOKEN);
+		expect(JSON.parse(body)).toMatchObject({
+			error: { code: "codex_usage_upstream_error" },
+		});
+		expect(errorLog).toHaveBeenCalledWith(
+			JSON.stringify({
+				event: "admin_request",
+				status: "failed",
+				code: "codex_usage_upstream_error",
+			}),
+		);
 	});
 
 	it("contains corrupt encrypted management data behind a safe JSON error", async () => {

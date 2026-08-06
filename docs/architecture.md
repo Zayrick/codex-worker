@@ -24,6 +24,7 @@ src/
 ├── codex/                   Codex 网络客户端与透明代理
 │   ├── client.ts
 │   ├── proxy.ts
+│   ├── subscription.ts
 │   ├── event-stream.ts
 │   └── stream-error.ts
 ├── chat/                    Chat Completions ↔ Responses 适配
@@ -114,6 +115,7 @@ messages / gemini → codex event-stream / http SSE encoder
 gemini → messages identifiers / token count
 codex proxy → live request adapter
 codex client → auth credentials
+codex subscription → auth credentials / codex client
 http admin-page → http response
 ```
 
@@ -163,7 +165,8 @@ fetch-handler
   → 同源写请求校验
   → admin-handler
       ├── API_KEYS CRUD → AES-GCM → KV
-      └── device-flow → oauth-provider → AES-GCM state / credentials → KV
+      ├── device-flow → oauth-provider → AES-GCM state / credentials → KV
+      └── subscription → id_token 元数据 + relay `/backend-api/wham/usage`
 ```
 
 定时刷新：
@@ -189,6 +192,8 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
   传输。长期 secret 不得进入 URL；`ADMIN_PATH` 只是额外隐藏层，不能替代管理密钥。
 - 所有 OAuth provider 请求叠加固定 10 秒超时；`enable_request_signal` 让客户端
   断开也能沿显式 `AbortSignal` 取消对应的上游子请求。
+- 管理面板的 Codex 用量请求同样叠加 10 秒超时，经配置的 HTTPS relay 访问，JSON
+  响应最多读取 256 KiB；上游错误正文会被丢弃，只记录固定错误 code。
 - Chat JSON 与 SSE 共用同一事件 reducer，避免两种输出模式解释同一 Codex 事件时
   产生漂移；单个 SSE 事件和 Chat 持久状态都有字符预算，工具调用与 alias 也有数量
   上限；终态只提取必要的 model、usage 与 incomplete reason，不重复保留完整 response，

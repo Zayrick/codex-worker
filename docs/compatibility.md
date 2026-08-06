@@ -146,11 +146,13 @@ HTTP/WebSocket 和出站 HTTP/TCP，没有通用 UDP socket API。
 2. 图片、Search、Realtime bootstrap 与明确的 Codex 直连别名使用同一 origin 下的
    `/backend-api/codex/*`；
 3. Realtime/Live sideband 保留 `/v1/realtime*` 或 `/v1/live/*` 路径，并按
-   `.reference/codex` 与 `.reference/CLIProxyAPI` 的实现直连专用 Realtime origin。
+   `.reference/codex` 与 `.reference/CLIProxyAPI` 的实现直连专用 Realtime origin；
+4. 受管理会话保护的订阅读取从同一 relay origin 请求 `/backend-api/wham/usage`，只把
+   归一化后的套餐、额度百分比和重置时间返回管理页，不开放为下游 API。
 
 Messages、Gemini 与 Realtime sideband 不再要求 relay 理解这些供应商路径；relay 只需
-承载 ChatGPT Codex 原生请求。Worker 直连 sideband 时仍只发送保存的上游 OAuth 与必要
-协议头，不转发下游 API key、Cookie 或客户端账户头。若自行把 direct alias 放回 relay，
+承载 ChatGPT Codex 原生请求及管理面板的 Wham 用量读取。Worker 直连 sideband 时仍只
+发送保存的上游 OAuth 与必要协议头，不转发下游 API key、Cookie 或客户端账户头。若自行把 direct alias 放回 relay，
 Caddy 反向代理 WebSocket 时须保留 Upgrade、子协议、流式正文与手动重定向语义。
 
 ## Cloudflare 平台限制

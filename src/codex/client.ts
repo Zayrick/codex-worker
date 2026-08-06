@@ -10,7 +10,7 @@ const FORWARDED_CODEX_HEADERS = [
 	"X-Codex-Turn-State",
 ] as const;
 
-const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
+export const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
 
 type CodexEnv = Pick<
 	Env,

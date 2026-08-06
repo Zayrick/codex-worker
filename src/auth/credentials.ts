@@ -39,6 +39,16 @@ type OAuthEnv = Pick<Env, "AUTH_KV" | "DATA_ENCRYPTION_KEY">;
 export async function getCodexCredentials(
 	env: OAuthEnv,
 ): Promise<CodexCredentials> {
+	const credentials = await requireValidOAuthCredentials(env);
+	return {
+		token: credentials.accessToken,
+		...(credentials.accountId ? { accountId: credentials.accountId } : {}),
+	};
+}
+
+export async function requireValidOAuthCredentials(
+	env: OAuthEnv,
+): Promise<StoredOAuthCredentials> {
 	const credentials = await readOAuthCredentials(env);
 	if (!credentials) {
 		throw new ApiError(
@@ -56,10 +66,7 @@ export async function getCodexCredentials(
 			"oauth_refresh_required",
 		);
 	}
-	return {
-		token: credentials.accessToken,
-		...(credentials.accountId ? { accountId: credentials.accountId } : {}),
-	};
+	return credentials;
 }
 
 export async function requireOAuthUnconfigured(
