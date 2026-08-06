@@ -17,12 +17,12 @@ import {
 import {
 	readOAuthCredentials,
 	storeOAuthCredentials,
-} from "../../src/auth/credentials";
+} from "../../worker/auth/credentials";
 import {
 	refreshProviderToken,
 	requestDeviceAuthorization,
-} from "../../src/auth/oauth-provider";
-import worker from "../../src/index";
+} from "../../worker/auth/oauth-provider";
+import worker from "../../worker/index";
 import { fetchMock } from "../support/fetch-mock";
 import {
 	ACCESS_TOKEN,

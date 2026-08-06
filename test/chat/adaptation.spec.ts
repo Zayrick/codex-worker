@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chatRequestToResponses } from "../../src/chat/request";
-import { chatCompletionFromEvents } from "../../src/chat/response";
+import { chatRequestToResponses } from "../../worker/chat/request";
+import { chatCompletionFromEvents } from "../../worker/chat/response";
 import { CREATED_AT } from "../support/worker-fixture";
 
 describe("request adaptation", () => {

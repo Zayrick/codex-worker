@@ -24,7 +24,7 @@ import {
 	codexSubscriptionMetadata,
 	fetchCodexSubscription,
 } from "../codex/subscription";
-import { adminDashboardPage, adminLoginPage } from "../http/admin-page";
+import { adminApplicationPage } from "../http/admin-page";
 import { jsonResponse } from "../http/response";
 import {
 	ApiError,
@@ -86,9 +86,7 @@ export async function handleAdminRoute(
 ): Promise<Response> {
 	try {
 		if (match.route === "page") {
-			return (await hasValidAdminSession(request, env))
-				? adminDashboardPage(match.basePath)
-				: adminLoginPage(match.basePath);
+			return await adminApplicationPage(request, env.ASSETS);
 		}
 		if (match.route === "login") {
 			return await handleAdminLogin(request, url, match.basePath, env);
@@ -168,7 +166,7 @@ async function handleAdminLogin(
 		if (!(error instanceof BodySizeLimitError)) throw error;
 	}
 	if (!(await adminSecretMatches(secret, env.ADMIN_SECRET))) {
-		return adminLoginPage(basePath, true, 401);
+		throw invalidAdminSecret();
 	}
 
 	const response = redirectResponse(basePath, url);
@@ -268,6 +266,15 @@ function invalidAdminSession(): ApiError {
 		"The management session is missing or expired.",
 		"authentication_error",
 		"invalid_admin_session",
+	);
+}
+
+function invalidAdminSecret(): ApiError {
+	return new ApiError(
+		401,
+		"管理密钥无效。",
+		"authentication_error",
+		"invalid_admin_secret",
 	);
 }
 

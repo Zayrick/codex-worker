@@ -6,19 +6,19 @@ import { describe, expect, it } from "vitest";
 import {
 	createChatState,
 	reduceCodexEvent,
-} from "../../src/chat/reducer";
+} from "../../worker/chat/reducer";
 import {
 	MAX_CHAT_RETAINED_CHARS,
 	MAX_CHAT_TOOL_ALIASES,
 	MAX_CHAT_TOOL_CALLS,
-} from "../../src/chat/state-budget";
-import { chatCompletionFromEvents } from "../../src/chat/response";
-import { createChatCompletionStream } from "../../src/chat/stream";
+} from "../../worker/chat/state-budget";
+import { chatCompletionFromEvents } from "../../worker/chat/response";
+import { createChatCompletionStream } from "../../worker/chat/stream";
 import {
 	decodeSseStream,
 	MAX_SSE_EVENT_CHARS,
 	SseDecoder,
-} from "../../src/codex/event-stream";
+} from "../../worker/codex/event-stream";
 
 const encoder = new TextEncoder();
 

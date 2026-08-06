@@ -7,8 +7,8 @@ import {
 	readApiKeys,
 	storeApiKeys,
 	updateApiKey,
-} from "../../src/auth/api-key";
-import { constantTimeEqual } from "../../src/auth/constant-time";
+} from "../../worker/auth/api-key";
+import { constantTimeEqual } from "../../worker/auth/constant-time";
 import {
 	CLIENT_API_KEY,
 	clientFetch,

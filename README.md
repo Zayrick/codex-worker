@@ -1,7 +1,8 @@
 # codex-worker
 
-运行在 Cloudflare Workers 上的 OpenAI 兼容 Codex API。Worker 通过受信任的 Caddy
-relay 访问 ChatGPT Codex 后端，并在 Workers KV 中保存上游 OAuth 与下游 API Key。
+运行在 Cloudflare Workers 上的 OpenAI 兼容 Codex API，并内置由 React + Vite 构建的
+管理面板。Worker 通过受信任的 Caddy relay 访问 ChatGPT Codex 后端，并在 Workers KV
+中保存上游 OAuth 与下游 API Key。
 
 ```text
 OpenAI client → Cloudflare Worker → Caddy → ChatGPT Codex
@@ -11,8 +12,9 @@ OpenAI client → Cloudflare Worker → Caddy → ChatGPT Codex
                              └── API_KEYS    AES-256-GCM 信封
 ```
 
-源码按 `app / auth / codex / chat / completions / messages / gemini / http / openai / shared` 分层。
-完整目录、依赖方向和请求流见[架构说明](docs/architecture.md)。
+React 管理端位于 `src/`，Worker 后端位于 `worker/`，后端继续按
+`app / auth / codex / chat / completions / messages / gemini / http / openai / shared`
+分层。完整目录、依赖方向和请求流见[架构说明](docs/architecture.md)。
 
 ## 数据与密钥模型
 
@@ -31,6 +33,10 @@ API 请求鉴权通过一次 KV `get` 读取并解密 `API_KEYS`，仅比较启�
 
 ## 管理面板
 
+管理面板是独立的 React 单页应用。Vite 构建后的资源由 Cloudflare Static Assets 提供；
+只有 Worker 精确匹配到 `/<ADMIN_PATH>/admin` 时才会读取并返回 React shell，因此不会把
+管理入口变成公开的 SPA fallback。管理 JSON API 仍由 Worker 会话鉴权保护。
+
 管理入口由两个 secret 保护：
 
 - `ADMIN_PATH`：1–128 位 ASCII 字母、数字、`_` 或 `-`，组成
@@ -48,7 +54,7 @@ API 请求鉴权通过一次 KV `get` 读取并解密 `API_KEYS`，仅比较启�
 https://your-worker.example.com/<ADMIN_PATH>/admin
 ```
 
-未登录管理会话时显示 `ADMIN_SECRET` 登录表单。登录后：
+未登录管理会话时，React 页面显示 `ADMIN_SECRET` 登录表单。登录后：
 
 - 没有 Codex OAuth 时，页面自动申请并显示 OpenAI 设备登录码与验证网址，然后按
   provider 返回的间隔轮询；
@@ -147,6 +153,7 @@ DATA_ENCRYPTION_KEY=<32 个随机字节的 base64url 编码>
 上传代码与 secrets：
 
 ```powershell
+pnpm build
 pnpm exec wrangler deploy --secrets-file .env.production
 ```
 
@@ -176,7 +183,7 @@ OAuth 与 API Key 常规读取使用最低的 `cacheTtl: 30`。Workers KV 是最
 - Worker 没有模块级 OAuth、API Key 或管理会话缓存；
 - 日志只记录固定事件与错误 code；
 - Worker 生成的错误不包含 token、API Key、主密钥、IV 或密文；
-- 管理 HTML 使用每次响应生成的 CSP nonce，禁止跨站 framing；
+- Worker 在每次返回 React shell 时重新注入 CSP nonce，并禁止跨站 framing；
 - 测试在隔离的 Workers runtime 中使用虚拟凭据。
 
 `CODEX_RELAY_URL` 必须指向你控制并审计的 HTTPS relay。relay 会接收 OAuth Bearer、

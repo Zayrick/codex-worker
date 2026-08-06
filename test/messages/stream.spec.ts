@@ -3,7 +3,7 @@ import {
 	waitOnExecutionContext,
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { createMessagesStream } from "../../src/messages/stream";
+import { createMessagesStream } from "../../worker/messages/stream";
 
 const encoder = new TextEncoder();
 const SIGNATURE = `gAAAA${"B".repeat(120)}`;

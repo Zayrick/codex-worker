@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { expect } from "vitest";
-import { storeApiKeys } from "../../src/auth/api-key";
-import type { StoredOAuthCredentials } from "../../src/auth/credentials";
+import { storeApiKeys } from "../../worker/auth/api-key";
+import type { StoredOAuthCredentials } from "../../worker/auth/credentials";
 
 export const CLIENT_API_KEY = `sk-${"b".repeat(64)}`;
 export const OTHER_API_KEY = `sk-${"c".repeat(64)}`;

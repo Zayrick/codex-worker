@@ -3,9 +3,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
 	forwardCodexProxy,
 	resolveCodexProxyUrl,
-} from "../../src/codex/proxy";
-import { upstreamProxyResponse, withCors } from "../../src/http/response";
-import { isRecord } from "../../src/shared/json";
+} from "../../worker/codex/proxy";
+import { upstreamProxyResponse, withCors } from "../../worker/http/response";
+import { isRecord } from "../../worker/shared/json";
 import { fetchMock } from "../support/fetch-mock";
 import {
 	authenticatedFetch,

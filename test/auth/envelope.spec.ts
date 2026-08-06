@@ -12,7 +12,7 @@ import {
 import {
 	readOAuthCredentials,
 	storeOAuthCredentials,
-} from "../../src/auth/credentials";
+} from "../../worker/auth/credentials";
 import { fetchMock } from "../support/fetch-mock";
 import {
 	ACCESS_TOKEN,

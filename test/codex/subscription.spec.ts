@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	codexSubscriptionFromUsage,
 	codexSubscriptionMetadata,
-} from "../../src/codex/subscription";
+} from "../../worker/codex/subscription";
 import { baseCredentials } from "../support/auth-fixture";
 
 describe("Codex subscription normalization", () => {

@@ -2,27 +2,39 @@
 	"name": "codex-worker",
 	"version": "0.0.0",
 	"private": true,
+	"type": "module",
 	"packageManager": "pnpm@11.18.0",
 	"engines": {
 		"node": ">=22"
 	},
 	"scripts": {
-		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
-		"start": "wrangler dev",
+		"dev": "vite",
+		"build": "tsc -b && vite build",
+		"lint": "oxlint",
+		"preview": "pnpm run build && vite preview",
+		"deploy": "pnpm run build && wrangler deploy",
+		"start": "vite",
 		"test": "vitest",
-		"typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json",
+		"typecheck": "tsc -b && tsc -p test/tsconfig.json",
 		"cf-typegen": "wrangler types",
-		"check": "wrangler types --check && pnpm run typecheck && vitest run && wrangler deploy --dry-run"
+		"check": "wrangler types --check && pnpm run typecheck && pnpm run lint && vitest run && vite build && wrangler deploy --dry-run"
 	},
 	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.51.0",
 		"@cloudflare/vitest-pool-workers": "^0.20.1",
 		"@types/node": "^26.1.2",
-		"typescript": "^5.9.3",
+		"@types/react": "^19.2.17",
+		"@types/react-dom": "^19.2.3",
+		"@vitejs/plugin-react": "^6.0.4",
+		"oxlint": "^1.75.0",
+		"typescript": "~6.0.2",
+		"vite": "^8.2.0",
 		"vitest": "^4.1.0",
-		"wrangler": "^4.118.0"
+		"wrangler": "^4.119.0"
 	},
 	"dependencies": {
-		"js-tiktoken": "1.0.21"
+		"js-tiktoken": "1.0.21",
+		"react": "^19.2.8",
+		"react-dom": "^19.2.8"
 	}
 }

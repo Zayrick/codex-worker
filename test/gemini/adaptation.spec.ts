@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { geminiRequestToResponses } from "../../src/gemini/request";
-import { geminiResponseFromTerminal } from "../../src/gemini/response";
+import { geminiRequestToResponses } from "../../worker/gemini/request";
+import { geminiResponseFromTerminal } from "../../worker/gemini/response";
 
 const CODEX_SIGNATURE = `gAAAA${"G".repeat(120)}`;
 

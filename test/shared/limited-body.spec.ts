@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	BodySizeLimitError,
 	readLimitedBody,
-} from "../../src/shared/limited-body";
+} from "../../worker/shared/limited-body";
 
 describe("bounded body reader", () => {
 	it("accepts a body exactly at the byte limit", async () => {

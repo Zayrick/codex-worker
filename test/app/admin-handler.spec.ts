@@ -9,12 +9,12 @@ import {
 	it,
 	vi,
 } from "vitest";
-import { readApiKeys } from "../../src/auth/api-key";
+import { readApiKeys } from "../../worker/auth/api-key";
 import {
 	deleteOAuthCredentials,
 	readOAuthCredentials,
 	storeOAuthCredentials,
-} from "../../src/auth/credentials";
+} from "../../worker/auth/credentials";
 import { fetchMock } from "../support/fetch-mock";
 import {
 	ACCESS_TOKEN,
@@ -63,19 +63,27 @@ describe("protected management panel", () => {
 	it("logs in with ADMIN_SECRET and issues a hardened encrypted session cookie", async () => {
 		const page = await exports.default.fetch(adminUrl());
 		expect(page.status).toBe(200);
-		expect(page.headers.get("Content-Security-Policy")).toContain("script-src 'nonce-");
+		expect(page.headers.get("Content-Security-Policy")).toMatch(
+			/script-src 'self' 'nonce-/,
+		);
 		expect(page.headers.get("Content-Security-Policy")).not.toContain("unsafe-inline");
 		expect(page.headers.get("Referrer-Policy")).toBe("same-origin");
 		const html = await page.text();
-		expect(html).toContain(`action="${adminPath()}/login"`);
-		expect(html).toContain('name="secret" type="password"');
+		expect(html).toContain('data-testid="admin-react-shell"');
+		expect(html).toMatch(/<script[^>]+nonce="[^"]+"/);
+		expect(html).not.toContain("__CODEX_WORKER_CSP_NONCE__");
 		expect(html).not.toContain(env.ADMIN_SECRET);
 		expect(html).not.toContain(env.DATA_ENCRYPTION_KEY);
 
 		const rejected = await login("wrong-admin-secret");
 		expect(rejected.status).toBe(401);
 		expect(rejected.headers.has("Set-Cookie")).toBe(false);
-		expect(await rejected.text()).toContain("管理密钥无效");
+		expect(await rejected.json()).toMatchObject({
+			error: {
+				code: "invalid_admin_secret",
+				message: "管理密钥无效。",
+			},
+		});
 
 		const accepted = await login(env.ADMIN_SECRET);
 		expect(accepted.status).toBe(303);
@@ -92,22 +100,9 @@ describe("protected management panel", () => {
 		const dashboard = await adminFetch("", sessionCookie(accepted));
 		expect(dashboard.status).toBe(200);
 		const dashboardHtml = await dashboard.text();
-		expect(dashboardHtml).toContain("Codex OAuth");
-		expect(dashboardHtml).toContain("订阅与额度");
-		expect(dashboardHtml).toContain("quota-time-dot");
-		expect(dashboardHtml).toContain("半透明圆点表示剩余时间");
-		expect(dashboardHtml).toContain(
-			"const percent = remaining / duration * 100;",
-		);
-		expect(dashboardHtml).not.toContain("时间刻度 · ");
-		expect(dashboardHtml).not.toContain("quota-meter-axis");
-		expect(dashboardHtml).toContain('request("/subscription")');
-		expect(dashboardHtml).toContain("API Keys");
-		expect(dashboardHtml).toContain("crypto.getRandomValues(bytes)");
-		expect(dashboardHtml).toContain(
-			'const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"',
-		);
-		expect(dashboardHtml).toContain('return "sk-" + value');
+		expect(dashboardHtml).toContain('data-testid="admin-react-shell"');
+		expect(dashboardHtml).not.toContain(env.ADMIN_SECRET);
+		expect(dashboardHtml).not.toContain(ACCESS_TOKEN);
 	});
 
 	it("returns OAuth metadata and API keys only to an authenticated session", async () => {

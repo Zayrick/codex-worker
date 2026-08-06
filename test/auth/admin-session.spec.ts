@@ -5,7 +5,7 @@ import {
 	adminSessionCookieHeader,
 	createAdminSession,
 	hasValidAdminSession,
-} from "../../src/auth/admin-session";
+} from "../../worker/auth/admin-session";
 
 describe("encrypted admin sessions", () => {
 	it("accepts the configured admin secret with a constant-time comparison", async () => {

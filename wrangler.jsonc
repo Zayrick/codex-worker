@@ -5,8 +5,16 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "codex-worker",
-	"main": "src/index.ts",
-	"compatibility_date": "2026-07-30",
+	"main": "worker/index.ts",
+	"compatibility_date": "2026-08-06",
+	// Vite supplies the generated client directory. The Worker fetches index.html
+	// through this binding only after matching the secret management path.
+	"assets": {
+		"binding": "ASSETS",
+		"html_handling": "none",
+		"not_found_handling": "none",
+		"run_worker_first": ["/index.html"]
+	},
 	// Persist structured Worker logs and upload source maps for readable production traces.
 	"observability": {
 		"enabled": true
@@ -66,12 +74,6 @@
 	 * https://developers.cloudflare.com/workers/configuration/environment-variables/
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
 	 */
-
-	/**
-	 * Static Assets
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": { "directory": "./public/", "binding": "ASSETS" },
 
 	/**
 	 * Service Bindings (communicate between multiple Workers)

@@ -4,7 +4,7 @@ import {
 	waitOnExecutionContext,
 } from "cloudflare:test";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import worker from "../../src/index";
+import worker from "../../worker/index";
 import { fetchMock } from "../support/fetch-mock";
 import {
 	authenticatedFetch,

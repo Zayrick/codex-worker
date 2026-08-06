@@ -20,6 +20,10 @@ export default defineConfig({
 			wrangler: { configPath: "./wrangler.jsonc" },
 			miniflare: {
 				bindings: testBindings,
+				assets: {
+					directory: "./test/support/admin-assets",
+					binding: "ASSETS",
+				},
 			},
 		}),
 	],

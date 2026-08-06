@@ -3,7 +3,7 @@ import {
 	waitOnExecutionContext,
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { createGeminiStream } from "../../src/gemini/stream";
+import { createGeminiStream } from "../../worker/gemini/stream";
 
 const encoder = new TextEncoder();
 

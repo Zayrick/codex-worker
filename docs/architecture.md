@@ -1,11 +1,18 @@
 # 架构与目录约定
 
-本项目采用按能力分组的轻量分层。目标是让业务规则保持纯粹，让 Workers、KV、
-HTTP 和上游 OAuth/Codex I/O 停留在明确边界；不引入单实现接口、基类、仓储层或
-依赖注入容器。
+本项目由 Vite 构建的 React 管理端和 Cloudflare Worker 后端组成。后端采用按能力分组
+的轻量分层，让业务规则保持纯粹，让 Workers、KV、HTTP 和上游 OAuth/Codex I/O
+停留在明确边界；不引入单实现接口、基类、仓储层或依赖注入容器。
 
 ```text
 src/
+├── main.tsx                 React composition root
+├── App.tsx                  管理面板状态与交互编排
+├── admin-api.ts             同源管理 API 客户端与响应校验
+├── App.css                  组件与响应式样式
+└── index.css                全局设计 token 与基础样式
+
+worker/
 ├── index.ts                 Worker composition root
 ├── app/                     路由匹配与用例编排
 │   ├── fetch-handler.ts
@@ -23,10 +30,13 @@ src/
 │   └── refresh.ts
 ├── codex/                   Codex 网络客户端与透明代理
 │   ├── client.ts
-│   ├── proxy.ts
-│   ├── subscription.ts
 │   ├── event-stream.ts
-│   └── stream-error.ts
+│   ├── proxy.ts
+│   ├── request-policy.ts
+│   ├── request.ts
+│   ├── stream-error.ts
+│   ├── subscription.ts
+│   └── websocket.ts
 ├── chat/                    Chat Completions ↔ Responses 适配
 │   ├── request.ts
 │   ├── content.ts
@@ -63,7 +73,7 @@ src/
 │   └── types.ts
 ├── live/                    Realtime bootstrap 的有限请求适配
 │   └── request.ts
-├── http/                    HTTP/SSE 表示与管理面板 HTML
+├── http/                    HTTP/SSE 表示与 React shell 交付
 │   ├── body.ts
 │   ├── cancellation.ts
 │   ├── admin-page.ts
@@ -99,6 +109,7 @@ test/
 ├── codex/client.spec.ts
 ├── shared/limited-body.spec.ts
 └── support/
+    ├── admin-assets/index.html
     ├── auth-fixture.ts
     ├── fetch-mock.ts
     └── worker-fixture.ts
@@ -107,6 +118,7 @@ test/
 ## 依赖方向
 
 ```text
+browser → React src → 同源管理 JSON API
 index → app → auth / chat / completions / messages / gemini / live / codex / http / openai → shared
 chat → codex event-stream
 chat → http SSE encoder
@@ -116,10 +128,11 @@ gemini → messages identifiers / token count
 codex proxy → live request adapter
 codex client → auth credentials
 codex subscription → auth credentials / codex client
-http admin-page → http response
+app admin-handler → http admin-page → ASSETS
 ```
 
-- `index.ts` 只组合 Workers handlers，不放业务规则。
+- `src/` 只负责管理界面的展示、交互和运行时响应校验，不持有服务端 secret。
+- `worker/index.ts` 只组合 Workers handlers，不放业务规则。
 - `app/` 决定“何时调用什么”，不实现加密、协议转换或上游网络细节。
 - Chat、Completions、Messages 与 Gemini 适配器负责纯数据转换；`client.ts`、`proxy.ts`、
   OAuth provider、KV credentials 负责 I/O。
@@ -161,12 +174,12 @@ fetch-handler
 ```text
 fetch-handler
   → ADMIN_PATH 精确路由
-  → ADMIN_SECRET / AES-GCM HttpOnly 会话
-  → 同源写请求校验
-  → admin-handler
-      ├── API_KEYS CRUD → AES-GCM → KV
-      ├── device-flow → oauth-provider → AES-GCM state / credentials → KV
-      └── subscription → id_token 元数据 + relay `/backend-api/wham/usage`
+  ├── 页面请求 → ASSETS `/index.html` → HTMLRewriter 注入每请求 CSP nonce → React
+  └── JSON API → ADMIN_SECRET / AES-GCM HttpOnly 会话 → 同源写请求校验
+      → admin-handler
+          ├── API_KEYS CRUD → AES-GCM → KV
+          ├── device-flow → oauth-provider → AES-GCM state / credentials → KV
+          └── subscription → id_token 元数据 + relay `/backend-api/wham/usage`
 ```
 
 定时刷新：
@@ -180,6 +193,8 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
 - 未匹配路由、不支持的方法和无效客户端 key 均返回无正文、无 CORS 的 `404`。
 - 只有已确认的公开 API 响应会添加 CORS；已知 API 路径族支持无鉴权的 `OPTIONS`
   预检。管理路由不添加 CORS，并要求 Cookie 会话及同源写请求。
+- Static Assets 不启用全站 SPA fallback；Worker 只在隐藏管理路径读取 `index.html`，其余
+  未匹配路径继续保持隐藏式 `404`。React shell 每次响应都替换构建期 nonce 占位符。
 - Worker 生成的错误按入口协议使用 OpenAI、Anthropic 或 Google envelope；Messages 与
   Gemini 还会把上游 HTML/非 JSON 错误收敛为安全 JSON。结构化 API 使用最小响应头
   allowlist；透明代理使用 denylist 删除 cookie、hop-by-hop、Cloudflare 和内部服务

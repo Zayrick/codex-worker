@@ -7,7 +7,7 @@ import {
 	overrideRequestFields,
 	removeRequestFields,
 	removeRequestFieldsUnlessAllowed,
-} from "../../src/codex/request-policy";
+} from "../../worker/codex/request-policy";
 
 const REMOVED_RESPONSE_FIELDS = [
 	"max_completion_tokens",

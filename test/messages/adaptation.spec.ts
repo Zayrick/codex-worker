@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { messagesRequestToResponses } from "../../src/messages/request";
-import { messageFromTerminalResponse } from "../../src/messages/response";
-import { countCodexInputTokens } from "../../src/messages/token-count";
+import { messagesRequestToResponses } from "../../worker/messages/request";
+import { messageFromTerminalResponse } from "../../worker/messages/response";
+import { countCodexInputTokens } from "../../worker/messages/token-count";
 
 const CODEX_SIGNATURE = `gAAAA${"A".repeat(120)}`;
 

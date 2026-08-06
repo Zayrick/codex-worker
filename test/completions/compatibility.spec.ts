@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { isRecord } from "../../src/shared/json";
+import { isRecord } from "../../worker/shared/json";
 import { fetchMock } from "../support/fetch-mock";
 import {
 	authenticatedFetch,
