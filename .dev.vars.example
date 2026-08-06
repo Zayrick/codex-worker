@@ -2,5 +2,5 @@
 # Values are intentionally empty so the required names remain versioned without credentials.
 ADMIN_PATH=
 ADMIN_SECRET=
-CODEX_RELAY_URL=
+CHATGPT_RELAY_URL=
 DATA_ENCRYPTION_KEY=

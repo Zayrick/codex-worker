@@ -163,7 +163,7 @@ fetch-handler
   → codex/proxy
   → codex/request（HTTP/WS 顶层 input 的 system → developer）
   → 清理客户端/边界 header、写入 OAuth
-  → relay（HTTP 响应流或双向 WebSocket 帧桥接）
+  → ChatGPT relay（HTTP 响应流或双向 WebSocket 帧桥接）
 ```
 
 图片、Realtime 与 Codex 直连别名不进入供应商协议适配，正文流或
@@ -179,7 +179,7 @@ fetch-handler
       → admin-handler
           ├── API_KEYS CRUD → AES-GCM → KV
           ├── device-flow → oauth-provider → AES-GCM state / credentials → KV
-          └── subscription → id_token 元数据 + relay `/backend-api/wham/usage`
+          └── subscription → id_token 元数据 + ChatGPT relay `/backend-api/wham/usage`
 ```
 
 定时刷新：
@@ -205,10 +205,12 @@ scheduled-handler → refresh → oauth-provider → credentials → KV
 - OAuth credentials、API_KEYS、设备 state 与管理会话分别使用独立 AES-GCM purpose
   string。`DATA_ENCRYPTION_KEY` 只负责加密；`ADMIN_SECRET` 只在登录表单 POST body 中
   传输。长期 secret 不得进入 URL；`ADMIN_PATH` 只是额外隐藏层，不能替代管理密钥。
-- 所有 OAuth provider 请求叠加固定 10 秒超时；`enable_request_signal` 让客户端
-  断开也能沿显式 `AbortSignal` 取消对应的上游子请求。
+- 所有 OAuth provider 请求直连 `auth.openai.com` 并叠加固定 10 秒超时；
+  `enable_request_signal` 让客户端断开也能沿显式 `AbortSignal` 取消对应的上游子请求。
 - 管理面板的 Codex 用量请求同样叠加 10 秒超时，经配置的 HTTPS relay 访问，JSON
   响应最多读取 256 KiB；上游错误正文会被丢弃，只记录固定错误 code。
+- Realtime/Live sideband 直连 `api.openai.com`，并保留原有路径与受控查询参数；只有
+  ChatGPT Codex 请求使用 `CHATGPT_RELAY_URL`，具体上游路径由 Worker 统一附加。
 - Chat JSON 与 SSE 共用同一事件 reducer，避免两种输出模式解释同一 Codex 事件时
   产生漂移；单个 SSE 事件和 Chat 持久状态都有字符预算，工具调用与 alias 也有数量
   上限；终态只提取必要的 model、usage 与 incomplete reason，不重复保留完整 response，

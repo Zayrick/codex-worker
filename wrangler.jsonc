@@ -32,13 +32,14 @@
 		"CORS_ORIGIN": "*"
 	},
 
-	// Local development and deployed environments supply these sensitive bindings as secrets.
+	// Local development and deployed environments supply these required values as secrets.
+	// The Worker appends every upstream path to CHATGPT_RELAY_URL.
 	// Required names support configuration validation and generated Env types.
 	"secrets": {
 		"required": [
 			"ADMIN_PATH",
 			"ADMIN_SECRET",
-			"CODEX_RELAY_URL",
+			"CHATGPT_RELAY_URL",
 			"DATA_ENCRYPTION_KEY"
 		]
 	},

@@ -7,8 +7,8 @@
 - **协议转换**：Worker 理解请求与响应结构，并生成目标 API 的输出；
 - **Codex 原生映射**：Worker 把公开路径映射到 ChatGPT Codex 原生路径；Responses
   请求只执行明确列出的角色兼容改写；
-- **传输透传**：Worker 提供鉴权、HTTP/WebSocket 和流式传输，但具体协议、模型与
-  OAuth 是否可用取决于 `CODEX_RELAY_URL` 所指向的 relay。
+- **传输透传**：Worker 提供鉴权、HTTP/WebSocket 和流式传输，但具体协议与模型是否
+  可用取决于 ChatGPT relay 及 OpenAI 直连上游。
 
 ## 路由矩阵
 
@@ -28,9 +28,9 @@ Codex 直连别名可传输常规 HTTP 方法，`CONNECT` 一律不开放。
 | `POST /v1/messages/count_tokens` | 本地转换 | 使用与创建请求相同的结构转换，再以本地 `cl100k_base` tokenizer 估算 `input_tokens`；不会访问 Anthropic token-count 服务，结果不保证与 Anthropic 自有 tokenizer 完全一致。 |
 | `POST /v1/alpha/search` | Codex 原生映射 | 映射到 `/backend-api/codex/alpha/search`。 |
 | `POST /v1/live` | Codex 原生映射 | 映射到 `/backend-api/codex/realtime/calls`；缺少时补 `intent=quicksilver` 与 `architecture=avas`。标准 multipart `sdp + session` 会转为 Codex JSON。 |
-| `GET /v1/live/{call_id}` | Codex 专用传输 | Sideband WebSocket 依据本地 Codex/CLIProxyAPI 实现直连 `api.openai.com` 的对应 `/v1/live/*` 路径，不经过 ChatGPT relay；事件帧不转换。 |
+| `GET /v1/live/{call_id}` | Codex 专用传输 | Sideband WebSocket 依据本地 Codex/CLIProxyAPI 实现直连 `api.openai.com` 的对应 `/v1/live/*` 路径；事件帧不转换。 |
 | `POST /v1/realtime/calls` | Codex 原生映射 | 与 `/v1/live` 使用同一 bootstrap 映射、multipart 适配和默认查询参数。 |
-| `GET /v1/realtime?call_id=...`、`GET /v1/realtime/calls/{call_id}` | Codex 专用传输 | Sideband WebSocket 直连本地参考实现指定的 Realtime origin；Worker 写入保存的 OAuth/账户头但不转换事件帧，并只保留经校验的 `call_id` 与规范化的 `intent` 查询参数。 |
+| `GET /v1/realtime?call_id=...`、`GET /v1/realtime/calls/{call_id}` | Codex 专用传输 | Sideband WebSocket 直连 `api.openai.com` 的 Realtime 路径；Worker 写入保存的 OAuth/账户头但不转换事件帧，并只保留经校验的 `call_id` 与规范化的 `intent` 查询参数。 |
 | `GET /v1beta/models`、`GET /v1beta/models/{model}` | 协议转换 | Codex 模型目录转换为 Gemini Model 资源。 |
 | `POST /v1beta/models/{model}:generateContent` | 协议转换 | Gemini Content、system instruction、内联/URI 媒体、function call/result、工具声明与 tool config 转为 Codex Responses；终态转为 Gemini candidates、parts、usageMetadata 和 finishReason。 |
 | `POST /v1beta/models/{model}:streamGenerateContent` | 协议转换 | 与 generateContent 使用同一请求转换，Codex SSE 增量转换为 Gemini SSE `data` 事件；流内失败使用 Google 风格 error envelope。 |
@@ -139,21 +139,16 @@ HTTP/WebSocket 和出站 HTTP/TCP，没有通用 UDP socket API。
 
 ## relay 路由要求
 
-`CODEX_RELAY_URL` 必须以 `/backend-api/codex/responses` 结尾。Worker 从它派生 Codex
-原生目标：
+`CHATGPT_RELAY_URL` 配置 ChatGPT relay 的 HTTPS origin。Worker 自动附加
+`/backend-api/codex/*` 与 `/backend-api/wham/usage`，反代服务不需要再识别或替换
+`/responses`、`/models`、`/usage` 等路径。Messages 与 Gemini 的结构转换仍统一提交到
+ChatGPT relay 的 `/backend-api/codex/responses`。
 
-1. 所有结构转换最终提交到 `/backend-api/codex/responses`；
-2. 图片、Search、Realtime bootstrap 与明确的 Codex 直连别名使用同一 origin 下的
-   `/backend-api/codex/*`；
-3. Realtime/Live sideband 保留 `/v1/realtime*` 或 `/v1/live/*` 路径，并按
-   `.reference/codex` 与 `.reference/CLIProxyAPI` 的实现直连专用 Realtime origin；
-4. 受管理会话保护的订阅读取从同一 relay origin 请求 `/backend-api/wham/usage`，只把
-   归一化后的套餐、额度百分比和重置时间返回管理页，不开放为下游 API。
-
-Messages、Gemini 与 Realtime sideband 不再要求 relay 理解这些供应商路径；relay 只需
-承载 ChatGPT Codex 原生请求及管理面板的 Wham 用量读取。Worker 直连 sideband 时仍只
-发送保存的上游 OAuth 与必要协议头，不转发下游 API key、Cookie 或客户端账户头。若自行把 direct alias 放回 relay，
-Caddy 反向代理 WebSocket 时须保留 Upgrade、子协议、流式正文与手动重定向语义。
+OAuth 设备登录、token 交换和刷新直接访问 `auth.openai.com`，管理页的验证网址也保持
+`https://auth.openai.com/codex/device`。Realtime/Live sideband 直接访问
+`api.openai.com`。这些直连请求与 ChatGPT relay 请求都只发送所需的上游 OAuth 与协议
+头，不转发下游 API key、Cookie 或客户端账户头。Caddy 反向代理 ChatGPT WebSocket 时
+须保留 Upgrade、子协议、流式正文与手动重定向语义。
 
 ## Cloudflare 平台限制
 

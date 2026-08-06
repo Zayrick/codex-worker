@@ -1,11 +1,12 @@
 # codex-worker
 
 运行在 Cloudflare Workers 上的 OpenAI 兼容 Codex API，并内置由 React + Vite 构建的
-管理面板。Worker 通过受信任的 Caddy relay 访问 ChatGPT Codex 后端，并在 Workers KV
-中保存上游 OAuth 与下游 API Key。
+管理面板。Worker 通过受信任的 Caddy relay 访问 `chatgpt.com`，直接访问
+`auth.openai.com` 与 `api.openai.com`，并在 Workers KV 中保存上游 OAuth 与下游
+API Key。
 
 ```text
-OpenAI client → Cloudflare Worker → Caddy → ChatGPT Codex
+OpenAI client → Cloudflare Worker → Caddy relay → ChatGPT Codex
                          │
                          └── AUTH_KV
                              ├── oauth       AES-256-GCM 信封
@@ -146,9 +147,14 @@ pnpm dev
 ```dotenv
 ADMIN_PATH=<随机 URL 安全路径段>
 ADMIN_SECRET=<独立生成的高强度管理密钥>
-CODEX_RELAY_URL=https://<你控制并审计的 relay>/backend-api/codex/responses
+CHATGPT_RELAY_URL=https://chatgpt-relay.example.com
 DATA_ENCRYPTION_KEY=<32 个随机字节的 base64url 编码>
 ```
+
+`CHATGPT_RELAY_URL` 配置为 relay 的 HTTPS origin，Worker 会自动补齐上游路径。
+
+这是一次不兼容的配置迁移：旧 `CODEX_RELAY_URL` 不再读取。升级部署前必须设置
+`CHATGPT_RELAY_URL`；确认新版本正常后，可删除 Cloudflare 中残留的旧 secret。
 
 首次部署可把同样的值写入不会提交到 Git 的 `.env.production`，再让 Wrangler 同时
 上传代码与 secrets：
@@ -187,13 +193,14 @@ OAuth 与 API Key 常规读取使用最低的 `cacheTtl: 30`。Workers KV 是最
 - Worker 在每次返回 React shell 时重新注入 CSP nonce，并禁止跨站 framing；
 - 测试在隔离的 Workers runtime 中使用虚拟凭据。
 
-`CODEX_RELAY_URL` 必须指向你控制并审计的 HTTPS relay。relay 会接收 OAuth Bearer、
-账户 ID、请求与响应内容，必须禁用敏感日志并限制入口。管理面板的额度请求会从同一
-origin 访问 `/backend-api/wham/usage`；最小 Caddy 反代示例会覆盖该路径：
+`CHATGPT_RELAY_URL` 必须由你控制并审计。它会接收 OAuth Bearer、账户 ID 以及 Codex
+请求与响应内容，必须禁用敏感日志并限制入口。反代只需把收到的原始路径交给
+`chatgpt.com`，不需要额外改写路径；最小 Caddy 示例为：
 
 ```caddyfile
-your-relay.example.com {
+chatgpt-relay.example.com {
 	reverse_proxy https://chatgpt.com {
+		header_up Host chatgpt.com
 		header_up -CF-Worker
 	}
 }

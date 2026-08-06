@@ -44,7 +44,7 @@ describe("streaming compatibility proxy", () => {
 	])("routes Codex sideband directly to its dedicated origin: $clientPath", ({ clientPath, upstreamPath }) => {
 		expect(
 			resolveCodexProxyUrl(
-				"https://codex-relay.test/backend-api/codex/responses",
+				"https://codex-relay.test",
 				new URL(`https://worker.example${clientPath}`),
 				"GET",
 			).toString(),

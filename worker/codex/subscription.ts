@@ -2,7 +2,7 @@ import {
 	requireValidOAuthCredentials,
 	type StoredOAuthCredentials,
 } from "../auth/credentials";
-import { DEFAULT_CODEX_CLIENT_VERSION, resolveRelayUrl } from "./client";
+import { DEFAULT_CODEX_CLIENT_VERSION } from "./client";
 import { ApiError, isAbortError } from "../shared/api-error";
 import {
 	isRecord,
@@ -13,6 +13,7 @@ import {
 	BodySizeLimitError,
 	readLimitedBody,
 } from "../shared/limited-body";
+import { resolveChatGptRelayUrl } from "../shared/relay-url";
 
 const CODEX_USAGE_PATH = "/backend-api/wham/usage";
 const CODEX_USAGE_REQUEST_TIMEOUT_MS = 10_000;
@@ -24,7 +25,7 @@ const MAX_MONTH_SECONDS = 31 * 24 * 60 * 60;
 
 type SubscriptionEnv = Pick<
 	Env,
-	"AUTH_KV" | "DATA_ENCRYPTION_KEY" | "CODEX_RELAY_URL"
+	"AUTH_KV" | "DATA_ENCRYPTION_KEY" | "CHATGPT_RELAY_URL"
 >;
 
 export type CodexQuotaWindowKind =
@@ -144,9 +145,10 @@ async function requestCodexUsage(
 		headers.set("Chatgpt-Account-Id", credentials.accountId);
 	}
 
+	const target = resolveUsageUrl(env.CHATGPT_RELAY_URL);
 	let response: Response;
 	try {
-		response = await fetch(resolveUsageUrl(env.CODEX_RELAY_URL), {
+		response = await fetch(target, {
 			method: "GET",
 			headers,
 			redirect: "manual",
@@ -186,18 +188,7 @@ async function readUsagePayload(
 }
 
 function resolveUsageUrl(relayUrl: string): URL {
-	const url = resolveRelayUrl(relayUrl);
-	const suffix = "/backend-api/codex/responses";
-	const normalizedPath = url.pathname.endsWith("/")
-		? url.pathname.slice(0, -1)
-		: url.pathname;
-	const suffixIndex = normalizedPath.lastIndexOf(suffix);
-	url.pathname =
-		suffixIndex >= 0 && suffixIndex + suffix.length === normalizedPath.length
-			? `${normalizedPath.slice(0, suffixIndex)}${CODEX_USAGE_PATH}`
-			: CODEX_USAGE_PATH;
-	url.search = "";
-	return url;
+	return resolveChatGptRelayUrl(relayUrl, CODEX_USAGE_PATH);
 }
 
 function buildQuotaWindows(payload: JsonObject, now: number): CodexQuotaWindow[] {

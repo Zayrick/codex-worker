@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 const testBindings = {
 	ADMIN_PATH: "test-management-path",
 	ADMIN_SECRET: "test-admin-secret",
-	CODEX_RELAY_URL: "https://codex-relay.test/backend-api/codex/responses",
+	CHATGPT_RELAY_URL: "https://codex-relay.test",
 	DATA_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64url"),
 };
 

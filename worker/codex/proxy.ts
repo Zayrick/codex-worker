@@ -1,11 +1,12 @@
 import { getCodexCredentials } from "../auth/credentials";
 import { adaptLiveBootstrapRequest } from "../live/request";
 import { ApiError, isAbortError } from "../shared/api-error";
-import { resolveRelayUrl } from "./client";
+import { resolveChatGptRelayUrl } from "../shared/relay-url";
 import { adaptCompactRequest, adaptResponsesRequest } from "./request";
 import { bridgeResponsesWebSocket } from "./websocket";
 
 const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
+const CODEX_ROOT = "/backend-api/codex";
 const REALTIME_SIDEBAND_ORIGIN = "https://api.openai.com";
 
 const BLOCKED_REQUEST_HEADERS = new Set([
@@ -41,7 +42,7 @@ const BLOCKED_REQUEST_HEADERS = new Set([
 
 type CodexProxyEnv = Pick<
 	Env,
-	"AUTH_KV" | "DATA_ENCRYPTION_KEY" | "CODEX_RELAY_URL"
+	"AUTH_KV" | "DATA_ENCRYPTION_KEY" | "CHATGPT_RELAY_URL"
 >;
 
 export type CodexProxyRoute = "responses" | "compact" | "proxy";
@@ -93,7 +94,7 @@ export async function forwardCodexProxy(
 	const credentials = await getCodexCredentials(env);
 	const outgoingRequest = await requestAdapters[route](request);
 	const target = resolveCodexProxyUrl(
-		env.CODEX_RELAY_URL,
+		env.CHATGPT_RELAY_URL,
 		clientUrl,
 		request.method,
 	);
@@ -146,10 +147,11 @@ export function resolveCodexProxyUrl(
 		}
 		return sideband;
 	}
-	const target = resolveRelayUrl(relayUrl);
-	const codexRoot = target.pathname.replace(/\/responses\/?$/, "");
-	target.pathname = proxyPath(clientUrl.pathname, method, codexRoot);
-	target.search = clientUrl.search;
+	const target = resolveChatGptRelayUrl(
+		relayUrl,
+		proxyPath(clientUrl.pathname, method),
+		clientUrl.search,
+	);
 
 	if (
 		method === "POST" &&
@@ -166,20 +168,20 @@ export function resolveCodexProxyUrl(
 	return target;
 }
 
-function proxyPath(pathname: string, method: string, codexRoot: string): string {
+function proxyPath(pathname: string, method: string): string {
 	if (isPathFamily(pathname, "/backend-api/codex")) return pathname;
 	if (isPathFamily(pathname, "/v1/images")) {
-		return `${codexRoot}${pathname.slice("/v1".length)}`;
+		return `${CODEX_ROOT}${pathname.slice("/v1".length)}`;
 	}
 	if (isPathFamily(pathname, "/v1/responses")) {
-		return `${codexRoot}${pathname.slice("/v1".length)}`;
+		return `${CODEX_ROOT}${pathname.slice("/v1".length)}`;
 	}
-	if (pathname === "/v1/alpha/search") return `${codexRoot}/alpha/search`;
+	if (pathname === "/v1/alpha/search") return `${CODEX_ROOT}/alpha/search`;
 	if (
 		method === "POST" &&
 		(pathname === "/v1/live" || pathname === "/v1/realtime/calls")
 	) {
-		return `${codexRoot}/realtime/calls`;
+		return `${CODEX_ROOT}/realtime/calls`;
 	}
 	return pathname;
 }

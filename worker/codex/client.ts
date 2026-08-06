@@ -1,6 +1,7 @@
 import { getCodexCredentials } from "../auth/credentials";
 import { ApiError, isAbortError } from "../shared/api-error";
 import type { JsonObject } from "../shared/json";
+import { resolveChatGptRelayUrl } from "../shared/relay-url";
 import { applyConvertedResponseEgressPolicy } from "./request-policy";
 
 const FORWARDED_CODEX_HEADERS = [
@@ -11,10 +12,12 @@ const FORWARDED_CODEX_HEADERS = [
 ] as const;
 
 export const DEFAULT_CODEX_CLIENT_VERSION = "0.144.1";
+const CODEX_MODELS_PATH = "/backend-api/codex/models";
+const CODEX_RESPONSES_PATH = "/backend-api/codex/responses";
 
 type CodexEnv = Pick<
 	Env,
-	"AUTH_KV" | "DATA_ENCRYPTION_KEY" | "CODEX_RELAY_URL"
+	"AUTH_KV" | "DATA_ENCRYPTION_KEY" | "CHATGPT_RELAY_URL"
 >;
 
 interface CodexRequestOptions {
@@ -28,7 +31,7 @@ export async function sendConvertedResponses(
 	options: CodexRequestOptions = {},
 ): Promise<Response> {
 	const credentials = await getCodexCredentials(env);
-	return fetchCodex(resolveRelayUrl(env.CODEX_RELAY_URL), {
+	return fetchCodex(chatGptRelayUrl(env.CHATGPT_RELAY_URL, CODEX_RESPONSES_PATH), {
 		method: "POST",
 		headers: codexHeaders(
 			credentials,
@@ -48,7 +51,7 @@ export async function fetchCodexModels(
 ): Promise<Response> {
 	const credentials = await getCodexCredentials(env);
 	return fetchCodex(
-		resolveModelsUrl(env.CODEX_RELAY_URL, clientUrl, options.headers),
+		resolveModelsUrl(env.CHATGPT_RELAY_URL, clientUrl, options.headers),
 		{
 			method: "GET",
 			headers: codexHeaders(
@@ -108,45 +111,12 @@ async function fetchCodex(url: URL, init: RequestInit): Promise<Response> {
 	return response;
 }
 
-export function resolveRelayUrl(relayUrl: string): URL {
-	let url: URL;
-	try {
-		url = new URL(relayUrl);
-	} catch {
-		throw new ApiError(
-			500,
-			"CODEX_RELAY_URL is not a valid URL.",
-			"configuration_error",
-			"invalid_relay_url",
-		);
-	}
-	if (url.protocol !== "https:" || url.username || url.password || url.hash) {
-		throw new ApiError(
-			500,
-			"CODEX_RELAY_URL must be an HTTPS URL without embedded credentials or a fragment.",
-			"configuration_error",
-			"unsafe_relay_url",
-		);
-	}
-	if (!/\/responses\/?$/.test(url.pathname)) {
-		throw new ApiError(
-			500,
-			"CODEX_RELAY_URL must end in /responses.",
-			"configuration_error",
-			"invalid_relay_path",
-		);
-	}
-	return url;
-}
-
 function resolveModelsUrl(
 	relayUrl: string,
 	clientUrl: URL,
 	clientHeaders: Headers | undefined,
 ): URL {
-	const url = resolveRelayUrl(relayUrl);
-	url.pathname = url.pathname.replace(/\/responses\/?$/, "/models");
-	url.search = "";
+	const url = chatGptRelayUrl(relayUrl, CODEX_MODELS_PATH);
 
 	const clientVersion =
 		clientUrl.searchParams.get("client_version")?.trim() ||
@@ -157,4 +127,8 @@ function resolveModelsUrl(
 		if (name === "channel") url.searchParams.append(name, value);
 	}
 	return url;
+}
+
+function chatGptRelayUrl(relayUrl: string, pathname: string): URL {
+	return resolveChatGptRelayUrl(relayUrl, pathname);
 }
