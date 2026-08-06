@@ -359,15 +359,7 @@ function App() {
 			<PanelHeader onLogout={() => void handleLogout()} />
 			<main className="panel-main">
 				<section className="welcome" aria-labelledby="dashboard-title">
-					<div>
-						<p className="eyebrow">CONTROL CENTER</p>
-						<h1 id="dashboard-title">运行控制台</h1>
-						<p>集中管理 Codex 登录、订阅额度与客户端访问凭据。</p>
-					</div>
-					<div className="worker-state">
-						<span className="status-dot" aria-hidden="true" />
-						Worker 已连接
-					</div>
+					<h1 id="dashboard-title">管理</h1>
 				</section>
 
 				<div className="dashboard-grid">
@@ -415,11 +407,10 @@ function App() {
 			) : null}
 			{pendingDelete ? (
 				<ConfirmDialog
-					detail={`“${pendingDelete}”将立即从管理列表中移除。`}
 					loading={keyDeleting}
 					onCancel={() => setPendingDelete(null)}
 					onConfirm={() => void deleteApiKey()}
-					title="删除这个 API Key？"
+					title={`删除“${pendingDelete}”？`}
 				/>
 			) : null}
 		</div>
@@ -430,10 +421,8 @@ function LoadingView() {
 	return (
 		<div className="auth-shell">
 			<div className="loading-card" role="status" aria-live="polite">
-				<BrandMark />
-				<span className="spinner spinner-large" aria-hidden="true" />
-				<h1>正在打开管理面板</h1>
-				<p>正在验证会话并读取 Worker 状态…</p>
+				<span className="spinner" aria-hidden="true" />
+				<span>正在加载…</span>
 			</div>
 		</div>
 	);
@@ -443,12 +432,7 @@ function InvalidPathView() {
 	return (
 		<div className="auth-shell">
 			<main className="auth-card compact-card">
-				<BrandMark />
-				<p className="eyebrow">CODEX WORKER</p>
-				<h1>管理地址无效</h1>
-				<p className="auth-description">
-					请通过部署时配置的隐藏管理地址访问此面板。
-				</p>
+				<h1>地址无效</h1>
 			</main>
 		</div>
 	);
@@ -472,16 +456,7 @@ function LoginView({ error, loading, onSubmit }: LoginViewProps) {
 
 	return (
 		<div className="auth-shell">
-			<div className="auth-orb auth-orb-one" aria-hidden="true" />
-			<div className="auth-orb auth-orb-two" aria-hidden="true" />
 			<main className="auth-card">
-				<BrandMark />
-				<p className="eyebrow">CODEX WORKER</p>
-				<h1>欢迎回来</h1>
-				<p className="auth-description">
-					输入管理密钥，继续管理你的边缘代理服务。
-				</p>
-
 				{error ? (
 					<div className="inline-alert error-alert" role="alert">
 						<Icon name="alert" />
@@ -490,16 +465,16 @@ function LoginView({ error, loading, onSubmit }: LoginViewProps) {
 				) : null}
 
 				<form className="auth-form" onSubmit={submit}>
-					<label htmlFor="admin-secret">管理密钥</label>
 					<div className="input-with-action">
 						<input
 							id="admin-secret"
+							aria-label="管理密码"
 							autoComplete="current-password"
 							autoFocus
 							disabled={loading}
 							maxLength={512}
 							onChange={(event) => setSecret(event.target.value)}
-							placeholder="输入 ADMIN_SECRET"
+							placeholder="输入管理密码"
 							required
 							type={visible ? "text" : "password"}
 							value={secret}
@@ -508,21 +483,16 @@ function LoginView({ error, loading, onSubmit }: LoginViewProps) {
 							className="input-action"
 							onClick={() => setVisible((value) => !value)}
 							type="button"
-							aria-label={visible ? "隐藏管理密钥" : "显示管理密钥"}
+							aria-label={visible ? "隐藏管理密码" : "显示管理密码"}
 						>
 							<Icon name={visible ? "eye-off" : "eye"} />
 						</button>
 					</div>
 					<button className="button button-primary auth-submit" disabled={loading}>
 						{loading ? <span className="spinner" aria-hidden="true" /> : null}
-						{loading ? "正在登录…" : "进入管理面板"}
+						{loading ? "登录中…" : "登录"}
 					</button>
 				</form>
-
-				<div className="auth-footnote">
-					<Icon name="shield" />
-					<span>密钥仅发送到当前 Worker，不会保存在浏览器中。</span>
-				</div>
 			</main>
 		</div>
 	);
@@ -532,15 +502,16 @@ function PanelHeader({ onLogout }: { onLogout: () => void }) {
 	return (
 		<header className="panel-header">
 			<a className="brand" href={window.location.pathname} aria-label="Codex Worker 首页">
-				<BrandMark small />
-				<span>
-					<strong>Codex Worker</strong>
-					<small>Cloudflare Edge Console</small>
-				</span>
+				<strong>Codex Worker</strong>
 			</a>
-			<button className="button button-ghost" onClick={onLogout} type="button">
+			<button
+				aria-label="退出"
+				className="button button-ghost header-action"
+				onClick={onLogout}
+				title="退出"
+				type="button"
+			>
 				<Icon name="logout" />
-				<span>退出管理</span>
 			</button>
 		</header>
 	);
@@ -569,30 +540,21 @@ function OAuthCard({
 }: OAuthCardProps) {
 	return (
 		<section className="card oauth-card" aria-labelledby="oauth-title">
-			<CardHeader
-				description="用于访问 Codex 上游服务"
-				icon="cloud"
-				title="Codex OAuth"
-			/>
+			<CardHeader id="oauth-title" title="Codex 登录" />
 
 			{oauth ? (
 				<div className="oauth-connected">
 					<div className="connection-banner">
-						<span className="connection-icon" aria-hidden="true">
-							<Icon name="check" />
-						</span>
-						<div>
-							<strong>账户已连接</strong>
-							<span>OAuth 凭据可用于代理请求</span>
-						</div>
+						<span className="status-dot" aria-hidden="true" />
+						<strong>已连接</strong>
 					</div>
 					<dl className="detail-list">
 						<div>
-							<dt>账户邮箱</dt>
+							<dt>邮箱</dt>
 							<dd>{oauth.email ?? "未提供"}</dd>
 						</div>
 						<div>
-							<dt>凭据过期时间</dt>
+							<dt>过期</dt>
 							<dd>
 								<time dateTime={isoDate(oauth.expiresAt)}>
 									{formatDate(oauth.expiresAt)}
@@ -607,31 +569,26 @@ function OAuthCard({
 						type="button"
 					>
 						{oauthRemoving ? <span className="spinner" aria-hidden="true" /> : null}
-						{oauthRemoving ? "正在退出…" : "退出 Codex 登录"}
+						{oauthRemoving ? "退出中…" : "退出登录"}
 					</button>
 				</div>
 			) : (
 				<div className="device-flow">
 					<div className="connection-banner pending-banner">
-						<span className="connection-icon" aria-hidden="true">
-							<Icon name="link" />
-						</span>
-						<div>
-							<strong>等待 Codex 登录</strong>
-							<span>完成设备验证后会自动连接</span>
-						</div>
+						<span className="status-dot" aria-hidden="true" />
+						<strong>未登录</strong>
 					</div>
 
 					{deviceLoading ? (
 						<div className="center-state" role="status">
 							<span className="spinner" aria-hidden="true" />
-							<span>正在创建设备登录码…</span>
+							<span>正在获取登录码…</span>
 						</div>
 					) : null}
 
 					{deviceAuthorization ? (
 						<div className="device-code-panel">
-							<p>在 OpenAI 设备验证页输入下面的登录码</p>
+							<p>在设备验证页输入此代码</p>
 							<div className="device-code-row">
 								<code>{deviceAuthorization.userCode}</code>
 								<button
@@ -650,12 +607,11 @@ function OAuthCard({
 								rel="noopener noreferrer"
 								target="_blank"
 							>
-								打开验证页面
+								打开验证页
 								<Icon name="external" />
 							</a>
 							<small>
-								登录码约 {Math.max(1, Math.floor(deviceAuthorization.expiresIn / 60))} 分钟内有效，
-								此页面会自动检查结果。
+								{Math.max(1, Math.floor(deviceAuthorization.expiresIn / 60))} 分钟内有效
 							</small>
 						</div>
 					) : null}
@@ -665,7 +621,7 @@ function OAuthCard({
 							<Icon name="alert" />
 							<span>{deviceError}</span>
 							<button className="text-button" onClick={onRetry} type="button">
-								重新获取
+								重试
 							</button>
 						</div>
 					) : null}
@@ -696,74 +652,66 @@ function SubscriptionCard({
 	const credits = info?.rateLimitResetCredits;
 	const availableCredits = credits?.availableCount ?? null;
 	const applicableCredits = credits?.applicableAvailableCount ?? null;
-	const showsTimeMarker = Boolean(
-		info?.windows.some((window) => quotaTimeState(window, now)),
-	);
 
 	return (
 		<section className="card subscription-card" aria-labelledby="subscription-title">
 			<CardHeader
+				id="subscription-title"
 				action={
 					<button
 						className="icon-button"
 						disabled={!oauth || loading}
 						onClick={onRefresh}
-						title="刷新订阅与额度"
+						title="刷新订阅"
 						type="button"
-						aria-label="刷新订阅与额度"
+						aria-label="刷新订阅"
 					>
 						<Icon name="refresh" spinning={loading} />
 					</button>
 				}
-				description="来自 Codex 的实时订阅与用量"
-				icon="meter"
-				title="订阅与额度"
+				title="订阅"
 			/>
 
 			{!oauth ? (
 				<div className="empty-state compact-empty">
-					<span className="empty-icon" aria-hidden="true">
-						<Icon name="meter" />
-					</span>
-					<strong>尚未连接 Codex</strong>
-					<p>完成设备登录后即可查看套餐与额度窗口。</p>
+					<p>登录后可查看订阅和额度</p>
 				</div>
 			) : (
 				<>
 					<div className="summary-grid">
-						<SummaryItem label="当前套餐" value={formatPlanType(subscription?.planType)} />
+						<SummaryItem label="套餐" value={formatPlanType(subscription?.planType)} />
 						{validTimestamp(subscription?.subscriptionActiveStart) ? (
 							<SummaryItem
-								label="订阅开始"
+								label="开始"
 								value={formatDate(subscription.subscriptionActiveStart)}
 							/>
 						) : null}
 						{validTimestamp(subscription?.subscriptionActiveUntil) ? (
 							<SummaryItem
 								danger={subscription.subscriptionActiveUntil <= now}
-								label="订阅到期"
+								label="到期"
 								value={formatDate(subscription.subscriptionActiveUntil)}
 							/>
 						) : null}
 						{availableCredits !== null ? (
 							<SummaryItem
-								label="额度重置积分"
+								label="重置积分"
 								value={
 									applicableCredits === null
 										? String(Math.max(0, availableCredits))
-										: `${Math.max(0, availableCredits)} · 当前可用 ${Math.max(0, applicableCredits)}`
+										: `${Math.max(0, availableCredits)} · 可用 ${Math.max(0, applicableCredits)}`
 								}
 							/>
 						) : null}
 						{validTimestamp(info?.fetchedAt) ? (
-							<SummaryItem label="用量更新" value={formatDate(info.fetchedAt)} />
+							<SummaryItem label="更新" value={formatDate(info.fetchedAt)} />
 						) : null}
 					</div>
 
 					{loading ? (
 						<div className="loading-strip" role="status">
 							<span className="spinner" aria-hidden="true" />
-							正在获取最新用量…
+							正在刷新…
 						</div>
 					) : null}
 					{error ? (
@@ -780,16 +728,7 @@ function SubscriptionCard({
 							))}
 						</div>
 					) : !loading && !error ? (
-						<p className="muted-message">上游没有返回可展示的额度窗口。</p>
-					) : null}
-
-					{showsTimeMarker ? (
-						<p className="quota-legend">
-							<span className="legend-bar" aria-hidden="true" />
-							条形表示剩余额度
-							<span className="legend-dot" aria-hidden="true" />
-							圆点表示剩余时间
-						</p>
+						<p className="muted-message">暂无额度数据</p>
 					) : null}
 				</>
 			)}
@@ -854,7 +793,7 @@ function QuotaCard({ window, now }: { window: QuotaWindow; now: number }) {
 				</div>
 			) : null}
 			<p className="quota-reset">
-				重置时间：
+				{"重置 "}
 				{validTimestamp(window.resetAt) ? (
 					<time dateTime={isoDate(window.resetAt)}>{formatDate(window.resetAt)}</time>
 				) : (
@@ -898,6 +837,7 @@ function ApiKeysCard({
 	return (
 		<section className="card keys-card" aria-labelledby="keys-title">
 			<CardHeader
+				id="keys-title"
 				action={
 					<div className="card-actions">
 						<button
@@ -912,25 +852,19 @@ function ApiKeysCard({
 						</button>
 						<button className="button button-primary" onClick={onAdd} type="button">
 							<Icon name="plus" />
-							添加 API Key
+							添加
 						</button>
 					</div>
 				}
-				description={`${apiKeys.length} 个客户端访问凭据`}
-				icon="key"
-				title="API Keys"
+				title={`API Keys${apiKeys.length > 0 ? ` · ${apiKeys.length}` : ""}`}
 			/>
 
 			{apiKeys.length === 0 ? (
 				<div className="empty-state">
-					<span className="empty-icon" aria-hidden="true">
-						<Icon name="key" />
-					</span>
-					<strong>尚未配置 API Key</strong>
-					<p>添加一个 Key 后，客户端才能访问兼容 API。</p>
+					<strong>暂无 API Key</strong>
 					<button className="button button-secondary" onClick={onAdd} type="button">
 						<Icon name="plus" />
-						添加第一个 Key
+						添加
 					</button>
 				</div>
 			) : (
@@ -1058,10 +992,7 @@ function KeyEditorDialog({ entry, loading, onCancel, onSave }: KeyEditorDialogPr
 				role="dialog"
 			>
 				<div className="modal-header">
-					<div>
-						<p className="eyebrow">CLIENT CREDENTIAL</p>
-						<h2 id="key-editor-title">{existing ? "编辑 API Key" : "添加 API Key"}</h2>
-					</div>
+					<h2 id="key-editor-title">{existing ? "编辑 API Key" : "添加 API Key"}</h2>
 					<button
 						className="icon-button"
 						disabled={loading}
@@ -1119,14 +1050,10 @@ function KeyEditorDialog({ entry, loading, onCancel, onSave }: KeyEditorDialogPr
 							onClick={() => setKey(generateApiKey())}
 							type="button"
 						>
-							<Icon name="spark" />
-							安全生成
+							重新生成
 						</button>
 						<label className="switch-row">
-							<span>
-								<strong>启用此 Key</strong>
-								<small>停用后客户端请求会立即被拒绝</small>
-							</span>
+							<strong>启用</strong>
 							<input
 								checked={enabled}
 								disabled={loading}
@@ -1146,7 +1073,7 @@ function KeyEditorDialog({ entry, loading, onCancel, onSave }: KeyEditorDialogPr
 						</button>
 						<button className="button button-primary" disabled={loading} type="submit">
 							{loading ? <span className="spinner" aria-hidden="true" /> : null}
-							{loading ? "正在保存…" : "保存 API Key"}
+							{loading ? "保存中…" : "保存"}
 						</button>
 					</div>
 				</form>
@@ -1157,7 +1084,6 @@ function KeyEditorDialog({ entry, loading, onCancel, onSave }: KeyEditorDialogPr
 
 interface ConfirmDialogProps {
 	title: string;
-	detail: string;
 	loading: boolean;
 	onCancel: () => void;
 	onConfirm: () => void;
@@ -1165,7 +1091,6 @@ interface ConfirmDialogProps {
 
 function ConfirmDialog({
 	title,
-	detail,
 	loading,
 	onCancel,
 	onConfirm,
@@ -1178,12 +1103,7 @@ function ConfirmDialog({
 				className="modal confirm-modal"
 				role="alertdialog"
 			>
-				<span className="confirm-icon" aria-hidden="true">
-					<Icon name="trash" />
-				</span>
 				<h2 id="confirm-title">{title}</h2>
-				<p>{detail}</p>
-				<p className="confirm-warning">删除后无法恢复，但可以随时创建新的 Key。</p>
 				<div className="modal-actions">
 					<button className="button button-secondary" disabled={loading} onClick={onCancel} type="button">
 						取消
@@ -1213,29 +1133,17 @@ function StatusToast({ notice, onClose }: { notice: Notice; onClose: () => void 
 }
 
 function CardHeader({
+	id,
 	title,
-	description,
-	icon,
 	action,
 }: {
+	id: string;
 	title: string;
-	description: string;
-	icon: IconName;
 	action?: ReactNode;
 }) {
 	return (
 		<div className="card-header">
-			<div className="card-heading">
-				<span className="card-icon" aria-hidden="true">
-					<Icon name={icon} />
-				</span>
-				<div>
-					<h2 id={`${title === "API Keys" ? "keys" : title === "Codex OAuth" ? "oauth" : "subscription"}-title`}>
-						{title}
-					</h2>
-					<p>{description}</p>
-				</div>
-			</div>
+			<h2 id={id}>{title}</h2>
 			{action}
 		</div>
 	);
@@ -1258,36 +1166,18 @@ function SummaryItem({
 	);
 }
 
-function BrandMark({ small = false }: { small?: boolean }) {
-	return (
-		<span className={`brand-mark${small ? " brand-mark-small" : ""}`} aria-hidden="true">
-			<svg viewBox="0 0 32 32" fill="none">
-				<path d="M16 4.5 25.96 10v12L16 27.5 6.04 22V10L16 4.5Z" />
-				<path d="m11.1 13.08 4.9-2.7 4.9 2.7v5.84l-4.9 2.7-4.9-2.7v-5.84Z" />
-				<path d="M16 10.38v11.24M11.1 13.08l4.9 2.75 4.9-2.75" />
-			</svg>
-		</span>
-	);
-}
-
 type IconName =
 	| "alert"
 	| "check"
 	| "close"
-	| "cloud"
 	| "copy"
 	| "edit"
 	| "external"
 	| "eye"
 	| "eye-off"
-	| "key"
-	| "link"
 	| "logout"
-	| "meter"
 	| "plus"
 	| "refresh"
-	| "shield"
-	| "spark"
 	| "trash";
 
 function Icon({ name, spinning = false }: { name: IconName; spinning?: boolean }) {
@@ -1315,8 +1205,6 @@ function iconPaths(name: IconName): ReactNode {
 			return <path d="m5 12 4.2 4.2L19 6.5" />;
 		case "close":
 			return <><path d="m6 6 12 12" /><path d="M18 6 6 18" /></>;
-		case "cloud":
-			return <path d="M17.5 19H7a5 5 0 0 1-.9-9.92A7 7 0 0 1 19.4 11 4 4 0 0 1 17.5 19Z" />;
 		case "copy":
 			return <><rect height="13" rx="2" width="13" x="8" y="8" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></>;
 		case "edit":
@@ -1327,22 +1215,12 @@ function iconPaths(name: IconName): ReactNode {
 			return <><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" /><circle cx="12" cy="12" r="2.5" /></>;
 		case "eye-off":
 			return <><path d="m3 3 18 18" /><path d="M10.6 6.15A10.6 10.6 0 0 1 12 6c6.5 0 10 6 10 6a16.8 16.8 0 0 1-3 3.8" /><path d="M6.6 6.6C3.5 8.4 2 12 2 12s3.5 6 10 6a10.7 10.7 0 0 0 3.4-.55" /></>;
-		case "key":
-			return <><circle cx="7.5" cy="15.5" r="4.5" /><path d="m11 12 9-9" /><path d="m15 8 3 3" /><path d="m17 6 3 3" /></>;
-		case "link":
-			return <><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" /><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1" /></>;
 		case "logout":
 			return <><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /></>;
-		case "meter":
-			return <><path d="M4 19a8 8 0 1 1 16 0" /><path d="m12 15 4-5" /><path d="M5 19h14" /></>;
 		case "plus":
 			return <><path d="M12 5v14" /><path d="M5 12h14" /></>;
 		case "refresh":
 			return <><path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4v7h-7" /></>;
-		case "shield":
-			return <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />;
-		case "spark":
-			return <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2Z" /><path d="m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8Z" /><path d="m5 14 .7 1.8 1.8.7-1.8.7L5 19l-.7-1.8-1.8-.7 1.8-.7Z" /></>;
 		case "trash":
 			return <><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="m19 6-1 15H6L5 6" /><path d="M10 11v5M14 11v5" /></>;
 	}

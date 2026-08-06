@@ -20,10 +20,10 @@
 	--text: #18202b;
 	--text-secondary: #596574;
 	--text-tertiary: #7d8896;
-	--primary: #5b5bd6;
-	--primary-hover: #4d4dc4;
-	--primary-soft: #eeeeff;
-	--primary-border: #d8d8fb;
+	--primary: #2563eb;
+	--primary-hover: #1d4ed8;
+	--primary-soft: #eff6ff;
+	--primary-border: #bfdbfe;
 	--success: #138a5b;
 	--success-soft: #e9f7f1;
 	--success-border: #c5eadb;
@@ -83,7 +83,7 @@ a {
 }
 
 :focus-visible {
-	outline: 3px solid rgb(91 91 214 / 0.3);
+	outline: 3px solid color-mix(in srgb, var(--primary) 30%, transparent);
 	outline-offset: 2px;
 }
 
@@ -108,10 +108,10 @@ a {
 		--text: #edf0f3;
 		--text-secondary: #adb6c2;
 		--text-tertiary: #87929f;
-		--primary: #9696ff;
-		--primary-hover: #aaaaff;
-		--primary-soft: #282845;
-		--primary-border: #41416c;
+		--primary: #60a5fa;
+		--primary-hover: #93c5fd;
+		--primary-soft: #172554;
+		--primary-border: #1e3a8a;
 		--success: #5fd1a0;
 		--success-soft: #17372b;
 		--success-border: #285c49;
