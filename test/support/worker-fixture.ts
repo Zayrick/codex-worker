@@ -3,7 +3,7 @@ import { storeApiKeys } from "../../worker/auth/api-key";
 import { storeOAuthCredentials } from "../../worker/auth/credentials";
 
 export const CREATED_AT = 1_754_006_400;
-export const TEST_API_KEY = `sk-${"a".repeat(64)}`;
+export const TEST_API_KEY = `sk-${"a".repeat(19)}1`;
 const TEST_ACCESS_TOKEN = [
 	"e30",
 	Buffer.from(JSON.stringify({ exp: 4_102_444_800 })).toString("base64url"),

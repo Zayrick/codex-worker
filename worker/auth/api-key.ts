@@ -8,9 +8,12 @@ const API_KEYS_ENVELOPE_PURPOSE = "codex-worker/api-keys/v1";
 const MAX_API_KEYS_ENVELOPE_CHARS = 128 * 1024;
 const MAX_API_KEYS = 100;
 const MAX_API_KEY_NAME_LENGTH = 100;
-const MAX_PRESENTED_API_KEY_LENGTH = 512;
-const API_KEY_PATTERN = /^sk-[a-z0-9]{64}$/;
-const DUMMY_API_KEY = `sk-${"0".repeat(64)}`;
+const MIN_API_KEY_LENGTH = 11;
+const MAX_API_KEY_LENGTH = 512;
+const API_KEY_LETTER_PATTERN = /[A-Za-z]/;
+const API_KEY_DIGIT_PATTERN = /[0-9]/;
+const API_KEY_SYMBOL_PATTERN = /[^A-Za-z0-9\s]/;
+const DUMMY_API_KEY = `sk-${"a".repeat(19)}0`;
 
 type ApiKeyEnv = Pick<Env, "AUTH_KV" | "DATA_ENCRYPTION_KEY">;
 
@@ -30,7 +33,7 @@ export async function authenticateClient(
 	env: ApiKeyEnv,
 ): Promise<void> {
 	const token = clientToken(request);
-	if (!token || token.length > MAX_PRESENTED_API_KEY_LENGTH) {
+	if (!token || token.length > MAX_API_KEY_LENGTH) {
 		throw invalidApiKey();
 	}
 
@@ -140,7 +143,16 @@ export function validateApiKeyInput(value: unknown): ClientApiKey {
 	if (!isRecord(value)) throw invalidApiKeyRecord();
 	const name = validateApiKeyName(stringField(value, "name"));
 	const key = stringField(value, "key");
-	if (!key || !API_KEY_PATTERN.test(key)) throw invalidApiKeyRecord();
+	if (
+		!key ||
+		key.length < MIN_API_KEY_LENGTH ||
+		key.length > MAX_API_KEY_LENGTH ||
+		!API_KEY_LETTER_PATTERN.test(key) ||
+		!API_KEY_DIGIT_PATTERN.test(key) ||
+		!API_KEY_SYMBOL_PATTERN.test(key)
+	) {
+		throw invalidApiKeyRecord();
+	}
 	if (typeof value.enabled !== "boolean") throw invalidApiKeyRecord();
 	return { name, key, enabled: value.enabled };
 }
@@ -243,7 +255,7 @@ function invalidApiKey(): ApiError {
 function invalidApiKeyRecord(): ApiError {
 	return new ApiError(
 		400,
-		"API keys require a unique name, an sk- key with 64 lowercase letters or digits, and an enabled state.",
+		"API keys require a unique name, 11 to 512 characters with at least one letter, number, and non-whitespace symbol, and an enabled state.",
 		"invalid_request_error",
 		"invalid_api_key_record",
 	);

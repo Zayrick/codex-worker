@@ -17,8 +17,9 @@ import {
 	seedClientApiKeys,
 } from "../support/auth-fixture";
 
-const THIRD_API_KEY = `sk-${"d".repeat(64)}`;
-const FOURTH_API_KEY = `sk-${"e".repeat(64)}`;
+const THIRD_API_KEY = `sk-${"d".repeat(19)}3`;
+const FOURTH_API_KEY = `sk-${"e".repeat(19)}4`;
+const FLEXIBLE_API_KEY = `Legacy_${"f".repeat(55)}9!`;
 
 beforeEach(async () => {
 	await seedClientApiKeys();
@@ -80,6 +81,34 @@ describe("encrypted API_KEYS authentication", () => {
 		).resolves.toBeUndefined();
 	});
 
+	it("accepts longer keys without requiring the generated sk- format", async () => {
+		await storeApiKeys(env, [
+			{ name: "flexible", key: FLEXIBLE_API_KEY, enabled: true },
+		]);
+		await expect(
+			authenticateClient(
+				new Request("https://example.com/v1/models", {
+					headers: { Authorization: `Bearer ${FLEXIBLE_API_KEY}` },
+				}),
+				env,
+			),
+		).resolves.toBeUndefined();
+	});
+
+	it("accepts a key whose total length is exactly 11 characters", async () => {
+		const key = `A1!${"a".repeat(8)}`;
+		const keys = await createApiKey(env, {
+			name: "minimum-length",
+			key,
+			enabled: true,
+		});
+		expect(keys).toContainEqual({
+			name: "minimum-length",
+			key,
+			enabled: true,
+		});
+	});
+
 	it("creates, updates, and deletes validated records", async () => {
 		let keys = await createApiKey(env, {
 			name: " third ",
@@ -110,9 +139,16 @@ describe("encrypted API_KEYS authentication", () => {
 	});
 
 	it("rejects malformed and duplicate records", async () => {
-		await expect(
-			createApiKey(env, { name: "bad", key: "sk-short", enabled: true }),
-		).rejects.toMatchObject({ code: "invalid_api_key_record" });
+		for (const key of [
+			`A1!${"a".repeat(7)}`,
+			`sk-${"a".repeat(20)}`,
+			`${"a".repeat(19)}1`,
+			`${"1".repeat(19)}!`,
+		]) {
+			await expect(
+				createApiKey(env, { name: "bad", key, enabled: true }),
+			).rejects.toMatchObject({ code: "invalid_api_key_record" });
+		}
 		await expect(
 			createApiKey(env, {
 				name: "primary",

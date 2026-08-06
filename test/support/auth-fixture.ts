@@ -3,8 +3,8 @@ import { expect } from "vitest";
 import { storeApiKeys } from "../../worker/auth/api-key";
 import type { StoredOAuthCredentials } from "../../worker/auth/credentials";
 
-export const CLIENT_API_KEY = `sk-${"b".repeat(64)}`;
-export const OTHER_API_KEY = `sk-${"c".repeat(64)}`;
+export const CLIENT_API_KEY = `sk-${"b".repeat(19)}1`;
+export const OTHER_API_KEY = `sk-${"c".repeat(19)}2`;
 
 export const ACCESS_TOKEN = jwt({ exp: 4_102_444_800 });
 export const ID_TOKEN = jwt({

@@ -20,6 +20,10 @@ import {
 import "./App.css";
 
 const MANAGEMENT_PATH_PATTERN = /^\/[A-Za-z0-9_-]{1,128}\/admin\/?$/;
+const MIN_API_KEY_LENGTH = 11;
+const MAX_API_KEY_LENGTH = 512;
+const GENERATED_API_KEY_LENGTH = 20;
+const API_KEY_INPUT_PATTERN = String.raw`(?=.*[A-Za-z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s]).{${MIN_API_KEY_LENGTH},${MAX_API_KEY_LENGTH}}`;
 
 type Screen = "loading" | "login" | "dashboard" | "invalid-path";
 type Notice = { tone: "success" | "error"; text: string };
@@ -45,6 +49,9 @@ function App() {
 	const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
 	const [apiKeys, setApiKeys] = useState<ClientApiKey[]>([]);
 	const [keysRefreshing, setKeysRefreshing] = useState(false);
+	const [keysToggling, setKeysToggling] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
 	const [keyEditor, setKeyEditor] = useState<EditableKey>(null);
 	const [keySaving, setKeySaving] = useState(false);
 	const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -59,6 +66,7 @@ function App() {
 	const mountedRef = useRef(false);
 	const initializedRef = useRef(false);
 	const deviceRequestInFlightRef = useRef(false);
+	const keyTogglingRef = useRef<Set<string>>(new Set());
 	const pollTimerRef = useRef<number | null>(null);
 	const initializeRef = useRef(initialize);
 	initializeRef.current = initialize;
@@ -286,6 +294,51 @@ function App() {
 		}
 	}
 
+	async function toggleApiKey(entry: ClientApiKey): Promise<void> {
+		if (
+			!api ||
+			keysRefreshing ||
+			keyTogglingRef.current.size > 0
+		) {
+			return;
+		}
+
+		const enabled = !entry.enabled;
+		const pending = new Set(keyTogglingRef.current);
+		pending.add(entry.name);
+		keyTogglingRef.current = pending;
+		setKeysToggling(pending);
+		setApiKeys((current) =>
+			current.map((candidate) =>
+				candidate.name === entry.name ? { ...candidate, enabled } : candidate,
+			),
+		);
+
+		try {
+			const next = await api.updateApiKey(entry.name, { ...entry, enabled });
+			if (!mountedRef.current) return;
+			setApiKeys(next);
+			showNotice(`API Key 已${enabled ? "启用" : "停用"}。`, "success");
+		} catch (error) {
+			if (!mountedRef.current) return;
+			if (!handleSessionFailure(error)) {
+				setApiKeys((current) =>
+					current.map((candidate) =>
+						candidate.name === entry.name
+							? { ...candidate, enabled: entry.enabled }
+							: candidate,
+					),
+				);
+				showNotice(errorMessage(error, "切换 API Key 状态失败。"), "error");
+			}
+		} finally {
+			const remaining = new Set(keyTogglingRef.current);
+			remaining.delete(entry.name);
+			keyTogglingRef.current = remaining;
+			if (mountedRef.current) setKeysToggling(remaining);
+		}
+	}
+
 	async function deleteApiKey(): Promise<void> {
 		if (!api || !pendingDelete || keyDeleting) return;
 		setKeyDeleting(true);
@@ -326,6 +379,8 @@ function App() {
 		setOAuth(null);
 		setSubscription(null);
 		setApiKeys([]);
+		keyTogglingRef.current = new Set();
+		setKeysToggling(new Set());
 		setDeviceAuthorization(null);
 		setDeviceError(null);
 		setKeyEditor(null);
@@ -386,6 +441,8 @@ function App() {
 					onDelete={setPendingDelete}
 					onEdit={setKeyEditor}
 					onRefresh={() => void refreshApiKeys()}
+					onToggle={(entry) => void toggleApiKey(entry)}
+					togglingKeys={keysToggling}
 				/>
 			</main>
 
@@ -866,6 +923,8 @@ interface ApiKeysCardProps {
 	onDelete: (name: string) => void;
 	onEdit: (entry: ClientApiKey) => void;
 	onRefresh: () => void;
+	onToggle: (entry: ClientApiKey) => void;
+	togglingKeys: ReadonlySet<string>;
 }
 
 function ApiKeysCard({
@@ -876,8 +935,11 @@ function ApiKeysCard({
 	onDelete,
 	onEdit,
 	onRefresh,
+	onToggle,
+	togglingKeys,
 }: ApiKeysCardProps) {
 	const [visibleKeys, setVisibleKeys] = useState<Set<string>>(() => new Set());
+	const busy = loading || togglingKeys.size > 0;
 
 	function toggleVisible(name: string): void {
 		setVisibleKeys((current) => {
@@ -896,7 +958,7 @@ function ApiKeysCard({
 					<div className="card-actions">
 						<button
 							className="icon-button"
-							disabled={loading}
+							disabled={busy}
 							onClick={onRefresh}
 							title="刷新 API Key"
 							type="button"
@@ -904,7 +966,12 @@ function ApiKeysCard({
 						>
 							<Icon name="refresh" spinning={loading} />
 						</button>
-						<button className="button button-primary" onClick={onAdd} type="button">
+						<button
+							className="button button-primary"
+							disabled={busy}
+							onClick={onAdd}
+							type="button"
+						>
 							<Icon name="plus" />
 							添加
 						</button>
@@ -916,7 +983,12 @@ function ApiKeysCard({
 			{apiKeys.length === 0 ? (
 				<div className="empty-state">
 					<strong>暂无 API Key</strong>
-					<button className="button button-secondary" onClick={onAdd} type="button">
+					<button
+						className="button button-secondary"
+						disabled={busy}
+						onClick={onAdd}
+						type="button"
+					>
 						<Icon name="plus" />
 						添加
 					</button>
@@ -937,10 +1009,11 @@ function ApiKeysCard({
 						<tbody>
 							{apiKeys.map((entry) => {
 								const visible = visibleKeys.has(entry.name);
+								const toggling = togglingKeys.has(entry.name);
 								return (
 									<tr key={entry.name}>
 										<td data-label="名称">
-											<strong>{entry.name}</strong>
+											<strong title={entry.name}>{entry.name}</strong>
 										</td>
 										<td data-label="Key">
 											<div className="key-value-cell">
@@ -966,15 +1039,26 @@ function ApiKeysCard({
 											</div>
 										</td>
 										<td data-label="状态">
-											<span className={`badge ${entry.enabled ? "badge-success" : "badge-muted"}`}>
-												<span className="badge-dot" aria-hidden="true" />
-												{entry.enabled ? "已启用" : "已停用"}
-											</span>
+											<label
+												className="key-status-switch"
+												title={toggling ? "正在更新状态…" : entry.enabled ? "停用" : "启用"}
+											>
+												<input
+													aria-busy={toggling || undefined}
+													aria-label={`${entry.enabled ? "停用" : "启用"} ${entry.name}`}
+													checked={entry.enabled}
+													className="switch-control"
+													disabled={busy}
+													onChange={() => onToggle(entry)}
+													type="checkbox"
+												/>
+											</label>
 										</td>
 										<td data-label="操作">
 											<div className="row-actions">
 												<button
 													className="icon-button"
+													disabled={busy}
 													onClick={() => onEdit(entry)}
 													title="编辑"
 													type="button"
@@ -984,6 +1068,7 @@ function ApiKeysCard({
 												</button>
 												<button
 													className="icon-button danger-icon-button"
+													disabled={busy}
 													onClick={() => onDelete(entry.name)}
 													title="删除"
 													type="button"
@@ -1014,7 +1099,7 @@ interface KeyEditorDialogProps {
 function KeyEditorDialog({ entry, loading, onCancel, onSave }: KeyEditorDialogProps) {
 	const existing = entry === "new" ? null : entry;
 	const [name, setName] = useState(existing?.name ?? "");
-	const [key, setKey] = useState(existing?.key ?? generateApiKey());
+	const [key, setKey] = useState(() => existing?.key ?? generateApiKey());
 	const [enabled, setEnabled] = useState(existing?.enabled ?? true);
 	const [visible, setVisible] = useState(false);
 
@@ -1079,11 +1164,13 @@ function KeyEditorDialog({ entry, loading, onCancel, onSave }: KeyEditorDialogPr
 								id="key-value"
 								autoComplete="off"
 								disabled={loading}
-								maxLength={67}
+								maxLength={MAX_API_KEY_LENGTH}
+								minLength={MIN_API_KEY_LENGTH}
 								onChange={(event) => setKey(event.target.value)}
-								pattern="sk-[a-z0-9]{64}"
+								pattern={API_KEY_INPUT_PATTERN}
 								required
 								spellCheck={false}
+								title="总长度超过 10 位，并同时包含字母、数字和符号"
 								type={visible ? "text" : "password"}
 								value={key}
 							/>
@@ -1110,6 +1197,7 @@ function KeyEditorDialog({ entry, loading, onCancel, onSave }: KeyEditorDialogPr
 							<strong>启用</strong>
 							<input
 								checked={enabled}
+								className="switch-control"
 								disabled={loading}
 								onChange={(event) => setEnabled(event.target.checked)}
 								type="checkbox"
@@ -1389,21 +1477,23 @@ function clampPercent(value: number): number {
 }
 
 function maskApiKey(value: string): string {
-	return `${value.slice(0, 5)}••••••••••••${value.slice(-8)}`;
+	return `${value.slice(0, 3)}••••••••••••${value.slice(-4)}`;
 }
 
 function generateApiKey(): string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
-	let value = "";
-	const bytes = new Uint8Array(96);
-	while (value.length < 64) {
-		crypto.getRandomValues(bytes);
-		for (const byte of bytes) {
-			if (byte < 252) value += alphabet[byte % alphabet.length];
-			if (value.length === 64) break;
+	const bytes = new Uint8Array(32);
+	for (;;) {
+		let value = "";
+		while (value.length < GENERATED_API_KEY_LENGTH) {
+			crypto.getRandomValues(bytes);
+			for (const byte of bytes) {
+				if (byte < 252) value += alphabet[byte % alphabet.length];
+				if (value.length === GENERATED_API_KEY_LENGTH) break;
+			}
 		}
+		if (/[a-z]/.test(value) && /[0-9]/.test(value)) return `sk-${value}`;
 	}
-	return `sk-${value}`;
 }
 
 export default App;

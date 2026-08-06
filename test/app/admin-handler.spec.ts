@@ -24,8 +24,8 @@ import {
 	seedClientApiKeys,
 } from "../support/auth-fixture";
 
-const NEW_API_KEY = `sk-${"d".repeat(64)}`;
-const UPDATED_API_KEY = `sk-${"e".repeat(64)}`;
+const NEW_API_KEY = `sk-${"d".repeat(19)}3`;
+const UPDATED_API_KEY = `sk-${"e".repeat(19)}4`;
 
 beforeAll(() => {
 	fetchMock.install();
@@ -127,8 +127,8 @@ describe("protected management panel", () => {
 				subscriptionActiveUntil: 1_800_000_000_000,
 			},
 			apiKeys: [
-				{ name: "primary", key: `sk-${"b".repeat(64)}`, enabled: true },
-				{ name: "secondary", key: `sk-${"c".repeat(64)}`, enabled: true },
+				{ name: "primary", key: `sk-${"b".repeat(19)}1`, enabled: true },
+				{ name: "secondary", key: `sk-${"c".repeat(19)}2`, enabled: true },
 			],
 		});
 	});
