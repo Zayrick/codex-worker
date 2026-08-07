@@ -99,7 +99,7 @@ tool config、thinking 和 usage metadata。`generationConfig` 中仅 thinking l
 
 ## 6. Responses 请求策略
 
-`POST /v1/responses` 与 WebSocket `response.create` 应用以下规则：
+`POST /v1/responses` 与 WebSocket `response.create` 应用以下共同规则：
 
 - 字符串形式的顶层 `input` 包装为单个 `user` / `input_text` 消息；
 - 数组 `input` 中消息项的 `role: "system"` 改为 `role: "developer"`；
@@ -108,6 +108,13 @@ tool config、thinking 和 usage metadata。`generationConfig` 中仅 thinking l
   `context_management`、`temperature`、`top_p`、`truncation` 和 `user`；
 - `service_tier` 仅在值严格等于 `priority` 时保留；
 - 其他未知字段保持不变。
+
+普通 HTTP `POST /v1/responses` 还会删除 `previous_response_id`、`generate`、
+`prompt_cache_retention`、`safety_identifier` 和 `stream_options`。WebSocket
+`response.create` 仅额外删除其中的 `prompt_cache_retention` 与 `safety_identifier`，保留
+`previous_response_id`、`generate` 和 `stream_options` 的会话语义。Chat Completions、旧版
+Completions、Anthropic Messages 与 Gemini Content 转换后发往 Codex Responses 的 HTTP
+请求也应用上述 HTTP 删除规则。
 
 compact 只应用数组 input 的角色规范化，不应用 Responses 创建参数策略。WebSocket
 `response.append` 同样只规范化 input 角色；其他文本帧、所有二进制帧和全部上游帧保持原样。

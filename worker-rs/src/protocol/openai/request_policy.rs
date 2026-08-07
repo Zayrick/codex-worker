@@ -142,7 +142,7 @@ impl<'a> BodyEditor<'a> {
     }
 }
 
-const REMOVED_RESPONSE_FIELDS: [&str; 9] = [
+const REMOVED_RESPONSE_FIELDS: [&str; 11] = [
     "max_completion_tokens",
     "max_output_tokens",
     "maxOutputTokens",
@@ -152,10 +152,15 @@ const REMOVED_RESPONSE_FIELDS: [&str; 9] = [
     "top_p",
     "truncation",
     "user",
+    "prompt_cache_retention",
+    "safety_identifier",
 ];
 
+const REMOVED_HTTP_RESPONSE_FIELDS: [&str; 3] =
+    ["previous_response_id", "generate", "stream_options"];
+
 #[must_use]
-pub fn response_create_egress_policy() -> RequestBodyPolicy {
+fn base_response_create_egress_policy() -> RequestBodyPolicy {
     let mut overrides = JsonObject::new();
     overrides.insert("store".into(), Value::Bool(false));
     RequestBodyPolicy::from_definition(RequestBodyPolicyDefinition {
@@ -169,6 +174,19 @@ pub fn response_create_egress_policy() -> RequestBodyPolicy {
 }
 
 #[must_use]
+pub fn http_response_create_egress_policy() -> RequestBodyPolicy {
+    RequestBodyPolicy::compose([
+        base_response_create_egress_policy(),
+        RequestBodyPolicy::remove(REMOVED_HTTP_RESPONSE_FIELDS),
+    ])
+}
+
+#[must_use]
+pub fn websocket_response_create_egress_policy() -> RequestBodyPolicy {
+    base_response_create_egress_policy()
+}
+
+#[must_use]
 pub fn converted_response_egress_policy() -> RequestBodyPolicy {
     let overrides = serde_json::from_value(json!({
         "instructions": "",
@@ -177,14 +195,21 @@ pub fn converted_response_egress_policy() -> RequestBodyPolicy {
     }))
     .unwrap_or_default();
     RequestBodyPolicy::compose([
-        response_create_egress_policy(),
+        http_response_create_egress_policy(),
         RequestBodyPolicy::override_fields(overrides),
     ])
 }
 
 #[must_use]
-pub fn apply_response_create_egress_policy<'a>(body: &'a JsonObject) -> Cow<'a, JsonObject> {
-    response_create_egress_policy().apply(body)
+pub fn apply_http_response_create_egress_policy<'a>(body: &'a JsonObject) -> Cow<'a, JsonObject> {
+    http_response_create_egress_policy().apply(body)
+}
+
+#[must_use]
+pub fn apply_websocket_response_create_egress_policy<'a>(
+    body: &'a JsonObject,
+) -> Cow<'a, JsonObject> {
+    websocket_response_create_egress_policy().apply(body)
 }
 
 #[must_use]
@@ -204,7 +229,7 @@ mod tests {
     fn response_policy_is_copy_on_write_and_preserves_extensions() {
         let satisfied = object(json!({"model":"gpt-5.6-luna","store":false}));
         assert!(matches!(
-            apply_response_create_egress_policy(&satisfied),
+            apply_http_response_create_egress_policy(&satisfied),
             Cow::Borrowed(_)
         ));
 
@@ -213,9 +238,14 @@ mod tests {
             "store":true,
             "service_tier":"flex",
             "max_tokens":1024,
+            "previous_response_id":"resp_1",
+            "generate":true,
+            "prompt_cache_retention":"24h",
+            "safety_identifier":"safety_1",
+            "stream_options":{"include_usage":true},
             "unknown_extension":{"keep":true}
         }));
-        let output = apply_response_create_egress_policy(&input);
+        let output = apply_http_response_create_egress_policy(&input);
         assert_eq!(
             output.as_ref(),
             &object(json!({
@@ -228,6 +258,29 @@ mod tests {
     }
 
     #[test]
+    fn websocket_policy_only_removes_websocket_unsupported_fields() {
+        let input = object(json!({
+            "model":"gpt-5.6-luna",
+            "store":false,
+            "previous_response_id":"resp_1",
+            "generate":true,
+            "prompt_cache_retention":"24h",
+            "safety_identifier":"safety_1",
+            "stream_options":{"include_usage":true}
+        }));
+        assert_eq!(
+            apply_websocket_response_create_egress_policy(&input).as_ref(),
+            &object(json!({
+                "model":"gpt-5.6-luna",
+                "store":false,
+                "previous_response_id":"resp_1",
+                "generate":true,
+                "stream_options":{"include_usage":true}
+            }))
+        );
+    }
+
+    #[test]
     fn converted_policy_centralizes_transport_invariants() {
         let input = object(json!({
             "instructions":"downstream",
@@ -235,7 +288,12 @@ mod tests {
             "stream":false,
             "include":["downstream.value"],
             "max_tokens":1024,
-            "context_management":[{"type":"compaction"}]
+            "context_management":[{"type":"compaction"}],
+            "previous_response_id":"resp_1",
+            "generate":true,
+            "prompt_cache_retention":"24h",
+            "safety_identifier":"safety_1",
+            "stream_options":{"include_usage":true}
         }));
         assert_eq!(
             apply_converted_response_egress_policy(&input).as_ref(),

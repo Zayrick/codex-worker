@@ -6,7 +6,9 @@ use serde_json::{Value, json};
 
 use crate::core::JsonObject;
 
-use super::request_policy::{BodyEditor, response_create_egress_policy};
+use super::request_policy::{
+    BodyEditor, http_response_create_egress_policy, websocket_response_create_egress_policy,
+};
 
 #[must_use]
 pub fn to_codex_message_role(role: &str) -> &str {
@@ -20,7 +22,15 @@ pub fn adapt_responses_create_body<'a>(body: &'a JsonObject) -> Cow<'a, JsonObje
     let mut editor = BodyEditor::new(body);
     normalize_string_response_input(&mut editor);
     rewrite_system_message_roles(&mut editor);
-    response_create_egress_policy().apply_to(&mut editor);
+    http_response_create_egress_policy().apply_to(&mut editor);
+    editor.finish()
+}
+
+fn adapt_responses_websocket_create_body<'a>(body: &'a JsonObject) -> Cow<'a, JsonObject> {
+    let mut editor = BodyEditor::new(body);
+    normalize_string_response_input(&mut editor);
+    rewrite_system_message_roles(&mut editor);
+    websocket_response_create_egress_policy().apply_to(&mut editor);
     editor.finish()
 }
 
@@ -43,7 +53,7 @@ pub fn adapt_responses_websocket_message(message: &str) -> String {
         return message.to_owned();
     };
     let adapted = match kind {
-        "response.create" => adapt_responses_create_body(&body),
+        "response.create" => adapt_responses_websocket_create_body(&body),
         "response.append" => adapt_compact_body(&body),
         _ => return message.to_owned(),
     };
@@ -116,7 +126,12 @@ mod tests {
             "model":"gpt-5.6-luna",
             "input":"hello",
             "store":true,
-            "max_tokens":20
+            "max_tokens":20,
+            "previous_response_id":"resp_1",
+            "generate":true,
+            "prompt_cache_retention":"24h",
+            "safety_identifier":"safety_1",
+            "stream_options":{"include_usage":true}
         }));
         assert_eq!(
             adapt_responses_create_body(&body).as_ref(),
@@ -152,10 +167,16 @@ mod tests {
             assert_eq!(adapt_responses_websocket_message(message), message);
         }
         let adapted = adapt_responses_websocket_message(
-            r#"{"type":"response.create","input":"hello","store":true}"#,
+            r#"{"type":"response.create","input":"hello","store":true,"previous_response_id":"resp_1","generate":true,"prompt_cache_retention":"24h","safety_identifier":"safety_1","stream_options":{"include_usage":true},"unknown_extension":{"keep":true}}"#,
         );
         let parsed: Value = serde_json::from_str(&adapted).unwrap_or(Value::Null);
         assert_eq!(parsed["store"], false);
         assert!(parsed["input"].is_array());
+        assert_eq!(parsed["previous_response_id"], "resp_1");
+        assert_eq!(parsed["generate"], true);
+        assert_eq!(parsed["stream_options"]["include_usage"], true);
+        assert_eq!(parsed["unknown_extension"]["keep"], true);
+        assert!(parsed.get("prompt_cache_retention").is_none());
+        assert!(parsed.get("safety_identifier").is_none());
     }
 }
