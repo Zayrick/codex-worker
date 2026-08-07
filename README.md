@@ -1,21 +1,23 @@
 # codex-worker
 
 运行在 Cloudflare Workers 上的 OpenAI 兼容 Codex API，并内置由 React + Vite 构建的
-管理面板。Worker 通过受信任的 Caddy relay 访问 `chatgpt.com`，直接访问
+管理面板。后端由 `worker-rs` 中的 Rust 编译为 WebAssembly，Worker 通过受信任的
+Caddy relay 访问 `chatgpt.com`，直接访问
 `auth.openai.com` 与 `api.openai.com`，并在 Workers KV 中保存上游 OAuth 与下游
 API Key。
 
 ```text
-OpenAI client → Cloudflare Worker → Caddy relay → ChatGPT Codex
-                         │
-                         └── AUTH_KV
-                             ├── oauth       AES-256-GCM 信封
-                             └── API_KEYS    AES-256-GCM 信封
+OpenAI client → Cloudflare Worker（Rust/Wasm）→ Caddy relay → ChatGPT Codex
+                                  │
+                                  └── AUTH_KV
+                                      ├── oauth       AES-256-GCM 信封
+                                      └── API_KEYS    AES-256-GCM 信封
 ```
 
-React 管理端位于 `src/`，Worker 后端位于 `worker/`，后端继续按
-`app / auth / codex / chat / completions / messages / gemini / http / openai / shared`
-分层。完整目录、依赖方向和请求流见[架构说明](docs/architecture.md)。
+React 管理端位于 `src/`，Rust 后端 crate 位于 `worker-rs/`。后端按
+`application / auth / core / http / protocol / upstream / transport` 分层：协议与领域规则
+不依赖 Cloudflare，只有 `transport` 接触 Workers、KV、Fetch、WebSocket 和 Static Assets。
+完整目录、依赖方向、可插拔适配器与组合方式见[架构说明](docs/architecture.md)。
 
 ## 数据与密钥模型
 
@@ -116,8 +118,9 @@ Codex OAuth 对应物，返回隐藏式 `404`。路径级兼容边界见
 [兼容矩阵](docs/compatibility.md)。
 
 需要转换或检查角色的 Chat、Completions、Messages、Gemini、Responses 与 compact JSON
-请求及 zstd 解压结果最多 4 MiB。图片、Realtime 和其他 Codex 原生别名路径不缓冲完整
-正文，不受这个应用层上限约束，但仍受 Cloudflare 套餐与 runtime 限制。
+请求及 zstd 解压结果最多 4 MiB。图片、Realtime 和其他 Codex 原生别名路径复用
+`ReadableStream` 直接转交正文，不受这个应用层上限约束，但仍受 Cloudflare 套餐与
+runtime 限制。
 
 Messages 与 Gemini 的 token-count 路径采用本地 `cl100k_base` tokenizer 对转换后的 Codex
 输入估算，不调用供应商 token-count 服务。它包含文本、工具 schema 和工具结果，但不会
@@ -129,12 +132,30 @@ Messages 与 Gemini 的 token-count 路径采用本地 `cl100k_base` tokenizer �
 `wrangler.jsonc` 声明自动预配的 `AUTH_KV`、四个必需 secrets 和每小时执行一次
 的 Cron Trigger。若要绑定已有 namespace，可为 `kv_namespaces` 补充 `id`。
 
-安装依赖并登录 Cloudflare：
+安装 Rust/Wasm 构建工具、前端依赖并登录 Cloudflare：
 
 ```powershell
+rustup target add wasm32-unknown-unknown
+cargo install worker-build --version 0.8.5 --locked
 pnpm install
 pnpm exec wrangler login
 ```
+
+Cloudflare Vite 插件把 React、Rust/Wasm Worker、workerd 与 Static Assets 组合在同一个
+开发服务器中。`pnpm dev` 会先执行一次 `worker-build --dev` 生成 Worker 入口，再启动
+`http://localhost:8787`：修改 React 源码使用 Fast Refresh，修改 `worker-rs/src` 会重新
+编译 Wasm 并重启 Worker runtime。管理页面、管理 API 与公开 API 始终保持同源。
+
+生产构建先执行 `worker-build --release`，再由 Vite 同时输出浏览器资源和 Worker bundle；
+生成的 Wrangler 配置会被后续 `vite preview` 与 `wrangler deploy` 自动使用。也可以单独
+构建 release 后端：
+
+```powershell
+pnpm run build:worker
+```
+
+该脚本等价于在 `worker-rs/` 目录运行 `worker-build --release`；需要单独生成本地调试
+入口时使用 `pnpm run build:worker:dev`。
 
 本地调试先复制不含值的示例，然后填写 `.dev.vars`：
 
@@ -142,6 +163,9 @@ pnpm exec wrangler login
 Copy-Item .dev.vars.example .dev.vars
 pnpm dev
 ```
+
+浏览器访问 `http://localhost:8787/<ADMIN_PATH>/admin`。Worker DevTools 位于
+`http://localhost:8787/__debug`。
 
 所需值为：
 
@@ -158,7 +182,7 @@ DATA_ENCRYPTION_KEY=<32 个随机字节的 base64url 编码>
 `CHATGPT_RELAY_URL`；确认新版本正常后，可删除 Cloudflare 中残留的旧 secret。
 
 首次部署可把同样的值写入不会提交到 Git 的 `.env.production`，再让 Wrangler 同时
-上传代码与 secrets：
+上传 Rust/Wasm Worker、前端资源与 secrets：
 
 ```powershell
 pnpm build
@@ -178,9 +202,11 @@ token。
 
 ## KV 一致性
 
-OAuth 与 API Key 常规读取使用最低的 `cacheTtl: 30`。Workers KV 是最终一致存储，
-其他边缘位置可能在短时间内继续看到旧值，因此启停、轮换、删除 Key 和退出 OAuth
-都不是全局瞬时生效。需要严格即时吊销时应改用强一致存储。
+OAuth 与 API Key 的常规读取显式使用 Workers KV 当前允许的最低
+`cacheTtl: 30`，以缩短边缘缓存的陈旧窗口；未指定 `cacheTtl` 的读取仍使用平台默认的
+60 秒。Workers KV 本身仍是最终一致存储，其他边缘位置可能在短时间内继续看到旧值，
+因此启停、轮换、删除 Key 和退出 OAuth 都不是全局瞬时生效。需要严格即时吊销时应改用
+强一致存储。
 
 `API_KEYS` 是单条合并记录，管理端每次修改只写一次；遇到同键每秒写入限制时会进行
 有限退避重试。并发管理员仍可能发生最后写入者覆盖，因而该面板面向低频、单管理员
@@ -192,7 +218,7 @@ OAuth 与 API Key 常规读取使用最低的 `cacheTtl: 30`。Workers KV 是最
 - 日志只记录固定事件与错误 code；
 - Worker 生成的错误不包含 token、API Key、主密钥、IV 或密文；
 - Worker 在每次返回 React shell 时重新注入 CSP nonce，并禁止跨站 framing；
-- 测试在隔离的 Workers runtime 中使用虚拟凭据。
+- 后端测试在宿主机直接运行 Rust 纯模块，并另做 Wasm 目标编译检查；测试固件不包含真实凭据。
 
 `CHATGPT_RELAY_URL` 必须由你控制并审计。它会接收 OAuth Bearer、账户 ID 以及 Codex
 请求与响应内容，必须禁用敏感日志并限制入口。反代只需把收到的原始路径交给
@@ -207,11 +233,20 @@ chatgpt-relay.example.com {
 }
 ```
 
-## 检查
+## 构建与检查
+
+后端实现与后端测试全部使用 Rust；`#[cfg(test)]` 单元测试按模块与实现放在一起，
+不需要跨语言测试驱动业务规则。常用命令：
 
 ```powershell
+pnpm run test:rust
+pnpm run check:rust
 pnpm check
 ```
+
+`test:rust` 在宿主目标运行纯领域、协议、URL/header policy、加密与应用组合测试；
+`check:rust` 依次检查格式、Clippy，并编译 `wasm32-unknown-unknown`。`pnpm check` 还会
+构建和检查前端、运行 Rust 测试，并执行 `wrangler deploy --dry-run` 验证最终上传入口。
 
 平台行为参考：[KV 读取](https://developers.cloudflare.com/kv/api/read-key-value-pairs/)、
 [KV 写入](https://developers.cloudflare.com/kv/api/write-key-value-pairs/)、

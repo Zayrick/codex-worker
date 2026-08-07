@@ -201,3 +201,8 @@ vite.config.ts.timestamp-*
 # Editor and operating-system metadata
 
 .DS_Store
+
+# Rust and generated Wasm Worker artifacts
+
+/worker-rs/target/
+/worker-rs/build/

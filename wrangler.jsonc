@@ -3,12 +3,14 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
+	"$schema": "./node_modules/wrangler/config-schema.json",
 	"name": "codex-worker",
-	"main": "worker/index.ts",
+	"main": "worker-rs/build/index.js",
 	"compatibility_date": "2026-08-06",
-	// Vite supplies the generated client directory. The Worker fetches index.html
-	// through this binding only after matching the secret management path.
+	// Vite builds the generated Rust/Wasm entry and the client assets together.
+	// The Rust Worker fetches index.html
+	// through this binding after matching the secret management path; routing
+	// /index.html through the Worker prevents direct access to the admin shell.
 	"assets": {
 		"binding": "ASSETS",
 		"html_handling": "none",
@@ -21,7 +23,7 @@
 	},
 	"upload_source_maps": true,
 	"compatibility_flags": [
-		// Required by node:zlib, which is used to decode Codex zstd request bodies.
+		// Keep Node.js compatibility available to generated glue and dependencies.
 		"nodejs_compat",
 		// Makes the incoming Request.signal available so client disconnects can cancel upstream work.
 		"enable_request_signal"

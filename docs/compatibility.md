@@ -1,6 +1,7 @@
 # OpenAI、Codex 与 Cloudflare 兼容边界
 
-本文档以 `.reference/codex` 的请求类型和传输实现为 Codex 协议依据，以
+当前后端由 `worker-rs` 编译为 Rust/Wasm。本文档以 `.reference/codex` 的请求类型和
+传输实现为 Codex 协议依据，以
 `.reference/CLIProxyAPI` 为扩展路由参考，并以当前 Cloudflare 官方文档为平台边界。
 这里的“兼容”分为三种，不应混为一谈：
 
@@ -77,10 +78,10 @@ reasoning encrypted signature；其他供应商生成的签名不会冒充 Codex
 
 ## 正文与流式传输
 
-Responses 与 compact 为执行角色改写而有界解析 JSON；Live/Realtime bootstrap 会解析
-multipart `sdp + session`。其他透明路由不会调用 `request.json()`、`formData()` 或
-`arrayBuffer()`，图片或实时音频正文直接作为 `ReadableStream` 交给 relay。以下信息
-会保留：
+Responses 与 compact 为执行角色改写而通过 Rust `LimitedBodyCollector` 有界解析 JSON；
+Live/Realtime bootstrap 会在专用上限内解析 multipart `sdp + session`。其他透明路由
+直接复用 Worker `ReadableStream` 交给 relay，不把图片或实时音频收集成完整字节数组。
+以下信息会保留：
 
 - HTTP 方法、查询参数、`Content-Type`、multipart boundary、`Range`、幂等键和
   协议版本头；
@@ -161,8 +162,8 @@ OAuth 设备登录、token 交换和刷新直接访问 `auth.openai.com`，管�
   Enterprise 默认 500 MB；
 - Worker 响应正文无强制大小上限，但若经过 CDN 缓存仍有缓存对象上限；本项目的
   API 响应不应缓存；
-- HTTP 请求 wall time 无固定上限，等待网络 I/O 不计入 CPU time，但转换工作与
-  JavaScript 缓冲仍计入 CPU/内存。
+- HTTP 请求 wall time 无固定上限，等待网络 I/O 不计入 CPU time，但 Rust/Wasm 中的
+  协议转换、JSON/zstd 解码和有界正文收集仍计入 CPU/内存。
 
 实现因此优先使用
 [Streams](https://developers.cloudflare.com/workers/runtime-apis/streams/) 透传大正文，
