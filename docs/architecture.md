@@ -168,7 +168,7 @@ Cloudflare 账户与 runtime 的限制仍然适用，具体数值应查阅当前
 │       ├── transport/
 │       └── upstream/
 ├── docs/                   项目文档
-├── .github/workflows/      CI/CD 工作流
+├── .github/workflows/      production 部署工作流
 ├── vite.config.ts          React、Rust watcher 与 Cloudflare Vite 集成
 ├── wrangler.jsonc          Worker、Assets、KV、secret 与 Cron 配置
 └── package.json            项目脚本与 JavaScript 依赖

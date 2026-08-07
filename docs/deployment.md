@@ -4,9 +4,9 @@
 
 | 组件 | 要求 |
 | --- | --- |
-| Node.js | 22 或更高版本；CI 使用 Node.js 24 |
+| Node.js | 22 或更高版本；GitHub Actions 使用 Node.js 24 |
 | pnpm | 11.18.0 |
-| Rust | 1.97 或更高版本；CI 使用 1.97.1 |
+| Rust | 1.97 或更高版本；GitHub Actions 使用 1.97.1 |
 | WebAssembly target | `wasm32-unknown-unknown` |
 | Worker 构建器 | `worker-build` 0.8.5 |
 | Cloudflare | 可部署 Workers、Static Assets、KV 和 Cron Trigger 的账户 |
@@ -174,10 +174,8 @@ pnpm deploy
 
 ## 8. GitHub Actions
 
-`.github/workflows/ci.yml` 负责 CI/CD：
-
-- 所有 push 和 pull request 都执行 `verify` job（`pnpm check`）；
-- push 到 `master` 或手动触发时，`deploy` job 会在 `verify` 成功后部署 production。
+`.github/workflows/deploy.yml` 负责 production 部署。push 到 `master` 或手动触发
+workflow 时，`deploy` job 会安装固定版本的工具链并执行 `pnpm deploy`。
 
 部署工作流使用 GitHub `production` environment，并要求：
 
@@ -190,9 +188,8 @@ API token 应限制到唯一目标 account，并只授予部署 Worker 及管理
 Worker runtime secret 不应复制到 GitHub；它们应在首次部署时写入 Cloudflare。
 
 `deploy` job 在同一个 runner 中完成 Rust/Wasm 构建、Vite 构建和 Wrangler 部署，确保生成
-配置与产物属于同一次构建；它通过 `needs: verify` 自动等待完整校验成功。生产仓库仍应通过
-branch protection 将 `verify` job 设为 required check，并按需要为 `production` environment
-配置 reviewer。
+配置与产物属于同一次构建。生产仓库应按需要为 `production` environment 配置
+reviewer，并通过 branch protection 要求 PR 在合并前通过必要检查。
 
 Cloudflare 的 CI 鉴权要求见
 [GitHub Actions 文档](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)。

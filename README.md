@@ -115,7 +115,7 @@ curl https://worker.example.com/v1/models \
 
 - [架构设计](docs/architecture.md)：系统拓扑、模块边界、请求流和持久化模型；
 - [API 与协议兼容性](docs/api.md)：鉴权、路由、转换规则和应用级限制；
-- [部署与运维](docs/deployment.md)：本地环境、首次部署、CI/CD 和部署验证；
+- [部署与运维](docs/deployment.md)：本地环境、首次部署、GitHub Actions 和部署验证；
 - [安全模型](docs/security.md)：密钥、会话、relay、日志和 KV 一致性。
 
 ## 使用约束

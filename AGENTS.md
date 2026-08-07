@@ -30,8 +30,9 @@
 - 开发使用 `pnpm dev`，不要以裸 `wrangler dev` 绕过 Rust 与 Vite 构建链。
 - 后端行为变更需在对应 Rust 模块补测试；快速验证用 `pnpm test` 或 `pnpm run check:rust`。
 - 代码或配置交付前运行 `pnpm check`；它覆盖 lint、Rust 测试/格式/Clippy、Wasm、构建和 dry-run。
-- 路由、配置、安全或部署语义变更时，同步更新 `README.md` 与 `docs/`；历史迁移写入 changelog，
-  不混入常驻文档。
+- 路由、配置、安全或部署语义变更时，同步更新 `README.md` 与 `docs/`。常驻文档只以项目
+  当前状态为基准自然陈述，不写本次工作、变更过程、新旧对比或交付总结；历史变化写入
+  changelog、commit 或 PR。
 
 ## 生产安全
 
