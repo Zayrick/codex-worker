@@ -192,6 +192,17 @@ pnpm exec wrangler deploy --secrets-file .env.production
 已有 secrets 的后续部署运行 `pnpm deploy`。不要提交 `.dev.vars` 或
 `.env.production`；`.gitignore` 会忽略实际 secret 文件。
 
+### GitHub Actions 自动部署
+
+仓库现在会对所有 push 与 pull request 执行完整 CI；push 到默认分支 `master` 时，
+GitHub Actions 会在同一个 job 中依次编译 Rust/Wasm、构建 React/Static Assets，并使用
+Cloudflare 官方 Wrangler Action 部署生成的 bundle。也可以从 Actions 页面手动触发生产
+部署。
+
+启用前需要在 GitHub `production` environment 中配置 `CLOUDFLARE_API_TOKEN` 和
+`CLOUDFLARE_ACCOUNT_ID`，并先完成上面的首次 secrets 引导部署。详细的权限、构建边界和
+排错说明见 [Cloudflare Worker 自动构建与部署](docs/cloudflare-worker-deployment.md)。
+
 ## OAuth 自动刷新
 
 Cron Trigger 每小时读取并解密 `oauth`。access token 将在 3 小时内过期时，
