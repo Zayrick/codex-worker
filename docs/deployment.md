@@ -174,10 +174,10 @@ pnpm deploy
 
 ## 8. GitHub Actions
 
-仓库包含两个独立工作流：
+`.github/workflows/ci.yml` 负责 CI/CD：
 
-- `.github/workflows/ci.yml`：对所有 push 和 pull request 执行 `pnpm check`；
-- `.github/workflows/deploy.yml`：push 到 `master` 或手动触发时部署 production。
+- 所有 push 和 pull request 都执行 `verify` job（`pnpm check`）；
+- push 到 `master` 或手动触发时，`deploy` job 会在 `verify` 成功后部署 production。
 
 部署工作流使用 GitHub `production` environment，并要求：
 
@@ -189,10 +189,10 @@ pnpm deploy
 API token 应限制到唯一目标 account，并只授予部署 Worker 及管理项目所用资源所需的权限。四个
 Worker runtime secret 不应复制到 GitHub；它们应在首次部署时写入 Cloudflare。
 
-部署工作流在同一个 job 中完成 Rust/Wasm 构建、Vite 构建和 Wrangler 部署，确保生成配置与
-产物属于同一次构建。CI 与部署是独立工作流，部署不会自动等待 CI；生产仓库应通过 branch
-protection 将 CI `verify` job 设为 required check，并按需要为 `production` environment 配置
-reviewer。
+`deploy` job 在同一个 runner 中完成 Rust/Wasm 构建、Vite 构建和 Wrangler 部署，确保生成
+配置与产物属于同一次构建；它通过 `needs: verify` 自动等待完整校验成功。生产仓库仍应通过
+branch protection 将 `verify` job 设为 required check，并按需要为 `production` environment
+配置 reviewer。
 
 Cloudflare 的 CI 鉴权要求见
 [GitHub Actions 文档](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)。
