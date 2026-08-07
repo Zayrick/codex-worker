@@ -1,266 +1,127 @@
-# codex-worker
+# Codex Worker
 
-运行在 Cloudflare Workers 上的 OpenAI 兼容 Codex API，并内置由 React + Vite 构建的
-管理面板。后端由 `worker-rs` 中的 Rust 编译为 WebAssembly，Worker 通过受信任的
-Caddy relay 访问 `chatgpt.com`，直接访问
-`auth.openai.com` 与 `api.openai.com`，并在 Workers KV 中保存上游 OAuth 与下游
-API Key。
+Codex Worker 是部署在 Cloudflare Workers 上的自托管 API 网关。项目使用 Rust/WebAssembly
+实现 Worker 后端，使用 React 与 Vite 提供管理界面，并将 ChatGPT Codex 能力转换或映射为
+OpenAI、Anthropic 和 Gemini 风格的接口。
 
-```text
-OpenAI client → Cloudflare Worker（Rust/Wasm）→ Caddy relay → ChatGPT Codex
-                                  │
-                                  └── AUTH_KV
-                                      ├── oauth       AES-256-GCM 信封
-                                      └── API_KEYS    AES-256-GCM 信封
-```
+本项目提供的是明确边界内的协议兼容能力，并非上述供应商 API 的完整替代实现。支持的路径、
+字段差异和传输限制以 [API 与协议兼容性](docs/api.md) 为准。
 
-React 管理端位于 `src/`，Rust 后端 crate 位于 `worker-rs/`。后端按
-`application / auth / core / http / protocol / upstream / transport` 分层：协议与领域规则
-不依赖 Cloudflare，只有 `transport` 接触 Workers、KV、Fetch、WebSocket 和 Static Assets。
-完整目录、依赖方向、可插拔适配器与组合方式见[架构说明](docs/architecture.md)。
+## 核心能力
 
-## 数据与密钥模型
+- 提供 Responses、Chat Completions、Completions、Anthropic Messages 和 Gemini Content 接口；
+- 支持 JSON、SSE、WebSocket、multipart 与二进制流式传输；
+- 通过管理界面完成 Codex 设备授权、订阅额度查看和下游 API Key 管理；
+- 使用 Workers KV 保存 OAuth 凭据与 API Key，并以 AES-256-GCM 加密；
+- 通过 Cron Trigger 定期刷新即将过期的 OAuth 凭据；
+- 将 React 管理端与 Rust/Wasm Worker 构建为同一个 Cloudflare 部署单元。
 
-`AUTH_KV` 只使用两个固定键：
-
-- `oauth`：access token、refresh token、账户 ID、邮箱和过期时间；
-- `API_KEYS`：API Key 数组，每项只包含 `name`、`key`、`enabled`。
-
-两条记录都使用 `DATA_ENCRYPTION_KEY` 加密。该 secret 必须是 32 个随机字节的
-base64url 编码；AES-GCM 每次写入都会生成新的 12 字节 IV，并用不同的 purpose string
-隔离 OAuth、API Key、设备登录 state 和管理会话。
-
-API 请求鉴权通过一次 KV `get` 读取并解密 `API_KEYS`，仅比较启用项。客户端提交值
-会先做 SHA-256，再用恒定时间比较。API Key 总长度必须超过 10 位（最多 512 位），并同时包含字母、
-数字和非空白符号；不强制特定前缀或固定长度。名称和 Key 值都必须唯一，最多保存 100 项。
-
-## 管理面板
-
-管理面板是独立的 React 单页应用。Vite 构建后的资源由 Cloudflare Static Assets 提供；
-只有 Worker 精确匹配到 `/<ADMIN_PATH>/admin` 时才会读取并返回 React shell，因此不会把
-管理入口变成公开的 SPA fallback。管理 JSON API 仍由 Worker 会话鉴权保护。
-
-管理入口由两个 secret 保护：
-
-- `ADMIN_PATH`：1–128 位 ASCII 字母、数字、`_` 或 `-`，组成
-  `/<ADMIN_PATH>/admin`；生产环境建议使用至少 32 位随机值；
-- `ADMIN_SECRET`：登录管理页的高强度密钥。
-
-登录成功后，Worker 发放 12 小时有效的 AES-GCM 管理会话 Cookie，Cookie 使用
-`Secure`、`HttpOnly`、`SameSite=Strict` 和 `__Host-` 前缀。会话会绑定当前
-`ADMIN_SECRET`，轮换管理密钥后旧会话立即失效。所有管理写请求还必须通过同源
-`Origin` 校验；管理响应不启用 CORS，并使用 `no-store`。
-
-浏览器只需访问：
+## 系统组成
 
 ```text
-https://your-worker.example.com/<ADMIN_PATH>/admin
+API client ───────────────────────────────┐
+                                          │
+Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker (Rust/Wasm)
+                                          │          ├─→ AUTH_KV
+                                          │          ├─→ Static Assets
+                                          │          ├─→ auth.openai.com
+                                          │          ├─→ api.openai.com
+                                          │          └─→ trusted HTTPS relay ─→ chatgpt.com
+                                          │
+                                          └─ API Key authentication
 ```
 
-未登录管理会话时，React 页面显示 `ADMIN_SECRET` 登录表单。登录后：
+`CHATGPT_RELAY_URL` 指向的 relay 不包含在本仓库中。它会接收上游 OAuth Bearer、账户标识以及
+请求和响应内容，因此必须由部署者控制、审计并限制访问。完整信任边界见
+[安全模型](docs/security.md)。
 
-- 没有 Codex OAuth 时，页面自动申请并显示 OpenAI 设备登录码与验证网址，然后按
-  provider 返回的间隔轮询；
-- 已登录时，页面显示邮箱、OAuth 过期时间和退出 Codex 登录按钮；退出会删除
-  `oauth` KV 记录；
-- “订阅与额度”区域从 OAuth `id_token` 读取套餐及订阅起止时间，并通过受信任 relay
-  实时请求 Codex 用量，显示 5 小时、周/月、代码审查及附加模型额度的已用/剩余比例、
-  重置时间和额度重置积分；读取失败不会影响 OAuth 与 API Key 管理；
-- 下方可以查看、添加、修改、启停和删除 API Key；“自动生成”按钮使用浏览器
-  Web Crypto 规范生成 `sk-` 加 20 位小写字母或数字，并保证随机部分同时包含字母和
-  数字，不使用 `Math.random()`；该格式不是后端的强制格式。
+## 环境要求
 
-同源管理端点位于 `/<ADMIN_PATH>/admin/*`：
+- Node.js 22 或更高版本；
+- pnpm 11.18.0；
+- Rust 1.97 或更高版本；
+- `wasm32-unknown-unknown` target；
+- `worker-build` 0.8.5；
+- Cloudflare 账户，以及可完成 Codex 设备授权的 OpenAI 账户；
+- 一个受信任的 ChatGPT HTTPS relay。
 
-- `POST /login`、`POST /logout`；
-- `GET /state`、`GET /subscription`；
-- `POST /oauth/device`、`POST /oauth/device/poll`、`DELETE /oauth`；
-- `GET|POST|PUT|DELETE /api-keys`。
+## 本地启动
 
-## 对外 API
+安装构建工具和依赖：
 
-健康检查不需要凭据：
-
-- `GET /healthz`：仅在 OAuth 凭据可解密且尚未过期时返回空正文 `204`；否则只记录
-  安全错误码并返回空正文 `404`。
-
-下列请求需要一个已启用的管理面板 API Key：
-
-- `GET /v1/models`；
-- 协议转换：`POST /v1/chat/completions`、`POST /v1/completions`、
-  `POST /v1/messages`、`POST /v1/messages/count_tokens`，以及 Gemini 风格的
-  `/v1beta/models*` 与三个标准 model action；
-- Codex 原生映射：`POST /v1/responses`、`POST /v1/responses/compact`、
-  `GET /v1/responses` WebSocket、
-  `/v1/images/*`、`POST /v1/alpha/search`；
-- HTTP/WebSocket 传输：`/v1/live*`、`/v1/realtime*`；
-- Codex CLI 直连别名：`/backend-api/codex/*`。
-
-客户端可使用 `Authorization: Bearer sk-...`、`X-Api-Key: sk-...` 或
-`X-Goog-Api-Key: sk-...`。同时提供时按 Bearer、`X-Api-Key`、
-`X-Goog-Api-Key` 的顺序选择，不会在首选值失败后回退。缺少、错误或已停用的 Key
-均返回空正文 `404`。
-
-Responses 创建请求会把字符串顶层 `input` 包装成用户 `input_text` 消息数组；Responses 与
-compact 会检查数组 `input`，把消息项的 `system` 角色改为 `developer`。Responses 创建请求
-还会固定 `store: false`，并移除 Codex 不支持的 `max_completion_tokens`、
-`max_output_tokens`、`maxOutputTokens`、`max_tokens`、`context_management`、`temperature`、
-`top_p`、`truncation` 与 `user`；`service_tier` 仅在值为 `priority` 时保留，其他未知字段保留。
-Responses WebSocket 对 `response.create` 应用同一策略，`response.append` 只改写角色，其他帧
-直接转交。Chat 与旧版 Completions 根据 `stream`
-返回 JSON 或 SSE；其他透明路径继续支持 multipart、二进制、Range 和 WebSocket 流式
-传输，同时隔离 OAuth、Cookie、内部边界和 hop-by-hop header。
-Anthropic Messages 使用其原生 JSON/SSE/error envelope；Gemini 支持 models 列表与详情、
-`generateContent`、`streamGenerateContent` 和 `countTokens`。这些请求都会转换成 Codex
-Responses 并只发往 `/backend-api/codex/responses`，不会把供应商路径拼到
-`chatgpt.com` 根目录。视频 API、`/v1beta/interactions` 和未知 Gemini action 没有可用的
-Codex OAuth 对应物，返回隐藏式 `404`。路径级兼容边界见
-[兼容矩阵](docs/compatibility.md)。
-
-需要转换或检查角色的 Chat、Completions、Messages、Gemini、Responses 与 compact JSON
-请求及 zstd 解压结果最多 4 MiB。图片、Realtime 和其他 Codex 原生别名路径复用
-`ReadableStream` 直接转交正文，不受这个应用层上限约束，但仍受 Cloudflare 套餐与
-runtime 限制。
-
-Messages 与 Gemini 的 token-count 路径采用本地 `cl100k_base` tokenizer 对转换后的 Codex
-输入估算，不调用供应商 token-count 服务。它包含文本、工具 schema 和工具结果，但不会
-与 Anthropic/Gemini 自有 tokenizer 保证逐 token 相等；应把结果用于预检与预算估算，
-不能用于账单核对。
-
-## 部署
-
-`wrangler.jsonc` 声明自动预配的 `AUTH_KV`、四个必需 secrets 和每小时执行一次
-的 Cron Trigger。若要绑定已有 namespace，可为 `kv_namespaces` 补充 `id`。
-
-安装 Rust/Wasm 构建工具、前端依赖并登录 Cloudflare：
-
-```powershell
+```sh
 rustup target add wasm32-unknown-unknown
 cargo install worker-build --version 0.8.5 --locked
-pnpm install
-pnpm exec wrangler login
+pnpm install --frozen-lockfile
 ```
 
-Cloudflare Vite 插件把 React、Rust/Wasm Worker、workerd 与 Static Assets 组合在同一个
-开发服务器中。`pnpm dev` 会先执行一次 `worker-build --dev` 生成 Worker 入口，再启动
-`http://localhost:8787`：修改 React 源码使用 Fast Refresh，修改 `worker-rs/src` 会重新
-编译 Wasm 并重启 Worker runtime。管理页面、管理 API 与公开 API 始终保持同源。
+创建本地配置：
 
-生产构建先执行 `worker-build --release`，再由 Vite 同时输出浏览器资源和 Worker bundle；
-生成的 Wrangler 配置会被后续 `vite preview` 与 `wrangler deploy` 自动使用。也可以单独
-构建 release 后端：
-
-```powershell
-pnpm run build:worker
+```sh
+cp .dev.vars.example .dev.vars
 ```
 
-该脚本等价于在 `worker-rs/` 目录运行 `worker-build --release`；需要单独生成本地调试
-入口时使用 `pnpm run build:worker:dev`。
-
-本地调试先复制不含值的示例，然后填写 `.dev.vars`：
-
-```powershell
-Copy-Item .dev.vars.example .dev.vars
-pnpm dev
-```
-
-浏览器访问 `http://localhost:8787/<ADMIN_PATH>/admin`。Worker DevTools 位于
-`http://localhost:8787/__debug`。
-
-所需值为：
+Windows PowerShell 可使用 `Copy-Item .dev.vars.example .dev.vars`。在 `.dev.vars` 中填写：
 
 ```dotenv
 ADMIN_PATH=<随机 URL 安全路径段>
-ADMIN_SECRET=<独立生成的高强度管理密钥>
-CHATGPT_RELAY_URL=https://chatgpt-relay.example.com
-DATA_ENCRYPTION_KEY=<32 个随机字节的 base64url 编码>
+ADMIN_SECRET=<高强度管理密钥>
+CHATGPT_RELAY_URL=https://relay.example.com
+DATA_ENCRYPTION_KEY=<32 个随机字节的无填充 base64url 编码>
 ```
 
-`CHATGPT_RELAY_URL` 配置为 relay 的 HTTPS origin，Worker 会自动补齐上游路径。
+以下命令可生成符合格式的随机值。请分别执行，为 `ADMIN_PATH`、`ADMIN_SECRET` 和
+`DATA_ENCRYPTION_KEY` 使用相互独立的值：
 
-这是一次不兼容的配置迁移：旧 `CODEX_RELAY_URL` 不再读取。升级部署前必须设置
-`CHATGPT_RELAY_URL`；确认新版本正常后，可删除 Cloudflare 中残留的旧 secret。
-
-首次部署可把同样的值写入不会提交到 Git 的 `.env.production`，再让 Wrangler 同时
-上传 Rust/Wasm Worker、前端资源与 secrets：
-
-```powershell
-pnpm build
-pnpm exec wrangler deploy --secrets-file .env.production
+```sh
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
 ```
 
-已有 secrets 的后续部署运行 `pnpm deploy`。不要提交 `.dev.vars` 或
-`.env.production`；`.gitignore` 会忽略实际 secret 文件。
+启动开发服务器：
 
-### GitHub Actions 自动部署
-
-仓库现在会对所有 push 与 pull request 执行完整 CI；push 到默认分支 `master` 时，
-GitHub Actions 会在同一个 job 中依次编译 Rust/Wasm、构建 React/Static Assets，并使用
-Cloudflare 官方 Wrangler Action 部署生成的 bundle。也可以从 Actions 页面手动触发生产
-部署。
-
-启用前需要在 GitHub `production` environment 中配置 `CLOUDFLARE_API_TOKEN` 和
-`CLOUDFLARE_ACCOUNT_ID`，并先完成上面的首次 secrets 引导部署。详细的权限、构建边界和
-排错说明见 [Cloudflare Worker 自动构建与部署](docs/cloudflare-worker-deployment.md)。
-
-## OAuth 自动刷新
-
-Cron Trigger 每小时读取并解密 `oauth`。access token 将在 3 小时内过期时，
-Worker 使用 refresh token 请求 OpenAI token endpoint；瞬时网络错误、HTTP 429 或
-5xx 最多尝试三次，每次上游请求最长 10 秒。成功后保留账户信息，用新 IV 覆盖
-`oauth`。普通 API 请求不会主动刷新，避免多个边缘位置同时消费旋转式 refresh
-token。
-
-## KV 一致性
-
-OAuth 与 API Key 的常规读取显式使用 Workers KV 当前允许的最低
-`cacheTtl: 30`，以缩短边缘缓存的陈旧窗口；未指定 `cacheTtl` 的读取仍使用平台默认的
-60 秒。Workers KV 本身仍是最终一致存储，其他边缘位置可能在短时间内继续看到旧值，
-因此启停、轮换、删除 Key 和退出 OAuth 都不是全局瞬时生效。需要严格即时吊销时应改用
-强一致存储。
-
-`API_KEYS` 是单条合并记录，管理端每次修改只写一次；遇到同键每秒写入限制时会进行
-有限退避重试。并发管理员仍可能发生最后写入者覆盖，因而该面板面向低频、单管理员
-配置。如果需要并发编辑或事务语义，应迁移到 Durable Object 或 D1。
-
-## 敏感信息处理
-
-- Worker 没有模块级 OAuth、API Key 或管理会话缓存；
-- 日志只记录固定事件与错误 code；
-- Worker 生成的错误不包含 token、API Key、主密钥、IV 或密文；
-- Worker 在每次返回 React shell 时重新注入 CSP nonce，并禁止跨站 framing；
-- 后端测试在宿主机直接运行 Rust 纯模块，并另做 Wasm 目标编译检查；测试固件不包含真实凭据。
-
-`CHATGPT_RELAY_URL` 必须由你控制并审计。它会接收 OAuth Bearer、账户 ID 以及 Codex
-请求与响应内容，必须禁用敏感日志并限制入口。反代只需把收到的原始路径交给
-`chatgpt.com`，不需要额外改写路径；最小 Caddy 示例为：
-
-```caddyfile
-chatgpt-relay.example.com {
-	reverse_proxy https://chatgpt.com {
-		header_up Host chatgpt.com
-		header_up -CF-Worker
-	}
-}
+```sh
+pnpm dev
 ```
 
-## 构建与检查
+默认地址为 `http://localhost:8787`。管理入口为：
 
-后端实现与后端测试全部使用 Rust；`#[cfg(test)]` 单元测试按模块与实现放在一起，
-不需要跨语言测试驱动业务规则。常用命令：
-
-```powershell
-pnpm run test:rust
-pnpm run check:rust
-pnpm check
+```text
+http://localhost:8787/<ADMIN_PATH>/admin
 ```
 
-`test:rust` 在宿主目标运行纯领域、协议、URL/header policy、加密与应用组合测试；
-`check:rust` 依次检查格式、Clippy，并编译 `wasm32-unknown-unknown`。`pnpm check` 还会
-构建和检查前端、运行 Rust 测试，并执行 `wrangler deploy --dry-run` 验证最终上传入口。
+首次进入管理界面后，依次完成管理密钥登录、Codex 设备授权和下游 API Key 创建。随后可验证
+公开 API：
 
-平台行为参考：[KV 读取](https://developers.cloudflare.com/kv/api/read-key-value-pairs/)、
-[KV 写入](https://developers.cloudflare.com/kv/api/write-key-value-pairs/)、
-[KV 删除](https://developers.cloudflare.com/kv/api/delete-key-value-pairs/)、
-[Web Crypto](https://developers.cloudflare.com/workers/runtime-apis/web-crypto/) 和
-[Secrets](https://developers.cloudflare.com/workers/configuration/secrets/)。
+```sh
+curl https://worker.example.com/v1/models \
+  -H 'Authorization: Bearer <client-api-key>'
+```
+
+生产环境配置、relay 示例和首次部署流程见 [部署与运维](docs/deployment.md)。
+
+## 常用命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm dev` | 编译开发版 Rust Worker，并启动 Vite/workerd 开发服务器 |
+| `pnpm build` | 构建 Rust/Wasm、React 资源和最终部署配置 |
+| `pnpm preview` | 在本地预览生产构建 |
+| `pnpm test` | 运行 Rust 后端测试 |
+| `pnpm run check:rust` | 检查 Rust 格式、宿主 Clippy 与 Wasm Clippy |
+| `pnpm check` | 执行 lint、测试、Rust 检查、生产构建和 Wrangler dry-run |
+| `pnpm deploy` | 构建并部署到 Cloudflare |
+
+## 文档
+
+- [架构设计](docs/architecture.md)：系统拓扑、模块边界、请求流和持久化模型；
+- [API 与协议兼容性](docs/api.md)：鉴权、路由、转换规则和应用级限制；
+- [部署与运维](docs/deployment.md)：本地环境、首次部署、CI/CD 和部署验证；
+- [安全模型](docs/security.md)：密钥、会话、relay、日志和 KV 一致性。
+
+## 使用约束
+
+- `DATA_ENCRYPTION_KEY` 是持久化数据的根密钥。没有迁移方案时不得更换，否则现有 OAuth
+  凭据和 API Key 将无法解密。
+- API Key 启停、删除和 OAuth 退出受 Workers KV 最终一致性影响，不保证全球即时生效。
+- 管理路径只提供额外的入口隐藏，不替代 `ADMIN_SECRET`、会话校验和同源校验。
+- 部署者应确认自身对相关账户、上游服务和网络基础设施的使用符合适用条款与政策。

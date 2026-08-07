@@ -1,253 +1,186 @@
-# 架构与目录约定
+# 架构设计
 
-本项目由 Vite 构建的 React 管理端和 Rust/WebAssembly Cloudflare Worker 后端组成。
-`worker-rs` 是唯一后端实现；Rust 中可在宿主机测试的领域与协议代码和仅在
-`wasm32-unknown-unknown` 编译的 Cloudflare 传输边界明确分开。
+## 1. 设计目标
 
-```text
-src/
-├── main.tsx                 React composition root
-├── App.tsx                  管理面板状态与交互编排
-├── admin-api.ts             同源管理 API 客户端与响应校验
-├── App.css                  组件与响应式样式
-└── index.css                全局设计 token 与基础样式
+Codex Worker 将多种客户端协议收敛到 ChatGPT Codex 上游，同时保持以下边界：
 
-worker-rs/
-├── Cargo.toml               Rust 依赖、Wasm crate 与 release profile
-├── Cargo.lock               可复现依赖解析
-└── src/
-    ├── lib.rs               fetch/scheduled Wasm 入口与顶层模块
-    ├── application/         用例路由、AdapterRegistry 与 composition factories
-    │   ├── adapters.rs
-    │   ├── routes.rs
-    │   └── tokenizer.rs
-    ├── auth/                OAuth、API key、会话、加密与抽象 ports
-    │   ├── oauth_ports.rs
-    │   ├── oauth_provider.rs
-    │   ├── credentials.rs
-    │   ├── refresh.rs
-    │   ├── device_flow.rs
-    │   ├── api_keys.rs
-    │   ├── admin_session.rs
-    │   ├── crypto.rs
-    │   └── store.rs
-    ├── core/                provider-neutral error 与 JSON 基础类型
-    ├── http/                runtime-neutral body、response DTO 与 SSE 编码
-    ├── protocol/            纯协议转换与流状态机
-    │   ├── openai/          Responses、Chat、Completions 与 SSE
-    │   ├── anthropic/       Messages、token count、error 与 stream presenter
-    │   └── gemini/          models、Content、token count、error 与 stream presenter
-    ├── upstream/codex/      纯 Codex URL/header/model/subscription policy
-    └── transport/           Cloudflare Workers 适配器
-        ├── router.rs        fetch/scheduled 请求入口
-        ├── api.rs           公开 API 用例组合
-        ├── admin.rs         管理页面与管理 API
-        ├── codex.rs         Codex Fetch、透明流与 WebSocket bridge
-        ├── oauth.rs         OAuth HTTP/clock ports 的 Worker 实现
-        ├── store.rs         Workers KV SecretStore 实现
-        ├── body.rs          Worker stream 的有界收集
-        ├── response.rs      Response DTO → Worker Response
-        ├── stream.rs        Rust presenter → Worker streaming Response
-        ├── provider_error.rs
-        └── config.rs
-```
+- 协议转换和领域规则可在宿主 Rust 环境中独立测试；
+- Cloudflare Request、KV、Fetch、Static Assets 和 WebSocket 类型仅存在于传输层；
+- 需要检查或改写的正文有明确上限，其余正文保持流式；
+- 管理面与公开 API 同源部署，但使用独立的路由、会话和 CORS 策略；
+- 长期凭据只以加密形式写入持久化存储。
 
-后端测试与模块放在一起，使用 Rust `#[cfg(test)]`；复杂协议的 golden fixture 也由对应
-Rust 模块读取或内嵌。仓库中的前端检查不承担 Rust 后端业务规则验证。
-
-## 依赖方向
+## 2. 系统拓扑
 
 ```text
-Cloudflare event export
-          ↓
-transport ─────────────→ worker crate / Workers KV / Fetch / WebSocket / ASSETS
-    ↓              ↓
-application ───→ auth
-    ↓              ↓
-protocol       abstract ports
-    ↓
-http / upstream / core
+                         ┌──────────────────────────────┐
+API clients ────────────→│                              │
+                         │ Cloudflare Worker            │──→ trusted relay ─→ chatgpt.com
+Admin browser ──────────→│ Rust/Wasm backend            │──→ auth.openai.com
+                         │                              │──→ api.openai.com
+                         └──────────┬───────────┬───────┘
+                                    │           │
+                                    ↓           ↓
+                                 AUTH_KV     Static Assets
+                                    │           │
+                              encrypted data  React admin UI
 ```
 
-更精确的约束如下：
+| 组件 | 职责 |
+| --- | --- |
+| React 管理端 | 管理会话登录、OAuth 设备授权、订阅额度展示和 API Key 管理 |
+| Rust/Wasm Worker | 路由、鉴权、协议转换、上游访问、流式传输和定时刷新 |
+| `AUTH_KV` | 保存加密后的 OAuth 凭据与下游 API Key 集合 |
+| Static Assets | 保存 Vite 构建的管理端资源；HTML 仅由隐藏管理路径读取 |
+| ChatGPT relay | 代表 Worker 访问 `chatgpt.com` 的 Codex 与用量路径 |
+| OpenAI 直连端点 | 承载 OAuth 设备流、token 刷新和 Realtime sideband |
 
-- `core` 不依赖其他业务模块。
-- `http`、`protocol`、`upstream` 与大部分 `auth` 都是 runtime-neutral Rust，不引用
-  `worker::Request`、`worker::Response`、KV 或 WebSocket。
-- `application` 选择路由、协议 adapter、tokenizer 和 response presenter，只编排用例，
-  不实现 Cloudflare I/O。
-- `transport` 是最外层 adapter；它可以依赖内部模块，内部模块不能反向依赖
-  `transport`。
-- `lib.rs` 是 Cloudflare event composition root。只有 `wasm32` 构建会导出
-  `transport` 和 `#[worker::event]`，因此纯模块可直接在宿主目标运行测试。
-- React `src/` 只负责管理界面的展示、交互与响应校验，不持有服务端 secret，也不参与
-  Worker 协议转换。
+relay 是外部运维组件，不属于本仓库的构建产物。Worker 只接受一个精确的 HTTPS origin，
+并自行追加上游路径。
 
-这个方向让协议规则、加密 envelope、URL/header policy 和流状态机可独立测试，也避免
-Cloudflare 类型沿调用链渗入领域模块。
+## 3. 后端模块边界
 
-## 可插拔 adapter、ports 与工厂组合
-
-`application::AdapterRegistry` 是请求转换的可插拔边界。内置 factory 以稳定 ID 注册
-Chat Completions、旧版 Completions、Anthropic Messages 和 Gemini Content 的
-`RequestAdapter`。新增兼容协议时实现 trait 并在 composition root 注册即可，Codex
-Fetch、KV 和路由传输不需要了解转换细节。Registry 还允许测试或部署组合替换某个实现。
-
-外部能力使用窄 ports，而不是让纯逻辑读取全局环境：
-
-- `OAuthHttpClient`、`OAuthClock` 与 `OAuthCredentialsStore` 隔离 provider Fetch、超时、
-  定时器和持久化；`transport::oauth` 与 `OAuthRepository` 分别提供 Worker adapter。
-- Anthropic 与 Gemini token count 依赖各自的 `TokenCounter` port；composition factory
-  当前注入共享的 Rust `Cl100kTokenCounter`，以后可以替换为模型专用或远程实现。
-- Gemini 请求计数依赖窄 `TokenCounter`，协议模块不需要知道 tokenizer crate。
-- `CodexClient` 只承担 Cloudflare 上游 I/O；URL、header、模型与 subscription 归一化
-  保留在 `upstream::codex` 纯函数中。
-- `ResponseAdapter` 描述对应的输出 presenter，HTTP transport 只负责把 upstream 事件
-  喂给选择出的 Rust 状态机。
-
-工厂都在请求或事件 composition root 创建，不存在可变的模块级凭据、请求状态或服务
-定位器。唯一共享的昂贵状态是不可变的 `cl100k_base` tokenizer vocabulary，由
-`application::tokenizer` 的 `OnceLock` 在 isolate 内初始化一次。
-
-## 关键请求流
-
-需要协议转换的 Chat、Completions、Messages 与 Gemini 请求：
+`worker-rs` 是唯一后端实现。依赖关系由外向内收敛：
 
 ```text
-worker::event(fetch)
-  → transport::router 精确路由
-  → API_KEYS repository 解密与启用 Key 鉴权
-  → transport::api
-  → 有界 JSON/zstd 解码
-  → AdapterRegistry::adapt
-  → CodexClient::send_converted_responses
-  → Rust response presenter / SSE state machine
-  → Worker Response
+lib.rs event exports
+        │
+        ↓
+transport ──→ application ──→ protocol ──→ core
+    │              └────────→ upstream ──→ core
+    ├───────────────────────→ auth ──────→ core
+    └───────────────────────→ http ──────→ core
 ```
 
-Responses、compact 与 Responses WebSocket：
+| 模块 | 职责 | 约束 |
+| --- | --- | --- |
+| `core` | 通用错误和 JSON 基础类型 | 不依赖业务模块或 Cloudflare runtime |
+| `http` | 有界正文、响应 DTO 和 SSE 编码 | 使用 runtime-neutral 类型 |
+| `protocol` | OpenAI、Anthropic、Gemini 的请求与响应转换 | 不发起网络请求，不访问绑定 |
+| `auth` | OAuth、API Key、会话、加密和存储抽象 | 通过窄接口访问时钟、HTTP 和持久化 |
+| `upstream/codex` | Codex URL、header、模型和订阅数据策略 | 保持纯策略逻辑，可独立测试 |
+| `application` | 路由模型、adapter registry 和 tokenizer 组合 | 编排协议能力，不执行 Cloudflare I/O |
+| `transport` | Workers Request/Response、KV、Fetch、Assets、流和 WebSocket | 唯一 Cloudflare I/O 边界 |
+
+`lib.rs` 是事件组合入口。仅 `wasm32` 构建导出 `fetch` 和 `scheduled` 事件，因而内部模块可以
+直接在宿主目标运行单元测试。
+
+## 4. 前端边界
+
+`src/` 是独立的 React 管理应用：
+
+- `main.tsx`：浏览器入口；
+- `App.tsx`：界面状态与交互编排；
+- `admin-api.ts`：同源管理 API 客户端与响应校验；
+- `App.css`、`index.css`：组件和全局样式。
+
+前端不读取 Worker secret，不参与协议转换，也不直接访问 KV。Vite 在 HTML 中写入 CSP nonce
+占位符；Worker 每次返回管理页时生成新 nonce 并替换该占位符。
+
+## 5. 请求处理流程
+
+### 5.1 协议转换请求
+
+Chat Completions、Completions、Anthropic Messages 和 Gemini Content 使用同一主流程：
 
 ```text
-transport::router
-  → transport::api
-  → CodexClient::forward_proxy
-  → protocol::openai Responses policy
-  → upstream::codex URL/header policy
-  → ChatGPT relay
-  → HTTP ReadableStream 或双向 WebSocket bridge
+fetch event
+  → exact route match
+  → downstream API Key authentication
+  → bounded JSON/zstd decoding
+  → request adapter
+  → Codex Responses request
+  → response presenter / SSE state machine
+  → protocol-specific response
 ```
 
-只有 Responses/compact JSON 和 Live/Realtime multipart bootstrap 会按专用上限收集正文。
-图片、Realtime sideband 与其他 Codex 原生别名把原始 `ReadableStream` 交给上游 Fetch；
-Responses WebSocket 只转换客户端发往上游的受支持文本事件，其他帧透明转发。
+路由选择 adapter 和 presenter；传输层只负责请求生命周期、上游 I/O 和 Worker Response。
 
-管理面板与 OAuth 设备登录：
+### 5.2 Codex 原生映射与透明代理
+
+Responses、Images、Realtime 和 `/backend-api/codex/*` 路径进入 Codex proxy。Responses 与
+compact 只执行明确规定的 JSON 策略；其他代理正文直接使用 `ReadableStream`。Responses
+WebSocket 只处理客户端发往上游的 `response.create` 和 `response.append` 文本帧，其余文本、
+二进制和反向帧保持不变。
+
+### 5.3 管理请求
 
 ```text
-transport::router
-  → ADMIN_PATH 精确路由
-  ├── 页面 → ASSETS `/index.html` → 替换构建期 CSP nonce 占位符 → React shell
-  └── JSON API → AES-GCM HttpOnly 会话 → 同源写请求校验
-      → transport::admin
-          ├── API_KEYS repository → AES-GCM → KV
-          ├── DeviceAuthorizationService → OAuth ports → KV
-          └── subscription → CodexClient usage → 纯 subscription mapping
+hidden admin path
+  ├─ GET page → ASSETS/index.html → inject CSP nonce
+  └─ admin API
+       → encrypted HttpOnly session
+       → same-origin check for writes
+       ├─ OAuth device flow
+       ├─ subscription usage
+       └─ encrypted API Key repository
 ```
 
-`GET /state` 只读取稳定的 OAuth metadata 和 API key；`GET /subscription` 才会发起带
-客户端取消、10 秒超时和 256 KiB 响应上限的实时用量请求。
+管理路由不启用 CORS。页面只在精确的 `/<ADMIN_PATH>/admin` 路径返回，不配置全站 SPA
+fallback。
 
-定时刷新：
+### 5.4 定时刷新
+
+`scheduled` 事件每小时检查 OAuth 凭据。仅当 access token 将在三小时内过期时才调用
+OpenAI token endpoint；普通 API 请求不会发起刷新，避免多个边缘位置同时使用旋转式
+refresh token。
+
+## 6. 持久化与状态
+
+`AUTH_KV` 使用两个固定键：
+
+| KV key | 内容 | 保护方式 |
+| --- | --- | --- |
+| `oauth` | access token、refresh token、账户信息和过期时间 | AES-256-GCM envelope |
+| `API_KEYS` | 下游 API Key 数组 | AES-256-GCM envelope |
+
+设备授权 state 和管理会话不写入 KV，而是使用独立 purpose 加密后交由客户端保存。所有 envelope
+由 `DATA_ENCRYPTION_KEY` 派生同一 AES-256-GCM 密钥，并通过不同的附加认证数据隔离用途。
+
+KV 适合本项目的低频写入和高频读取，但其读取最终一致。API Key 集合以单条记录读改写，管理面
+因此按低频、单管理员场景设计，不提供事务或并发编辑保证。相关安全影响见
+[安全模型](security.md)。
+
+## 7. 传输原则
+
+- 需要转换的 JSON 以及 zstd 解压结果限制为 4 MiB；
+- Live/Realtime multipart bootstrap 限制为 16 MiB；
+- 图片、实时媒体信令和其他透明代理正文保持流式，不受上述应用层 JSON 上限约束；
+- 上游重定向使用手动模式，避免 OAuth 自动发送到未知目标；
+- 客户端凭据、Cookie、账户头、转发头和 hop-by-hop header 不会原样进入上游；
+- 上游 Cookie、服务端标识和内部 header 不会原样返回客户端；
+- 公开 API 和管理面均使用 `Cache-Control: no-store`。
+
+Cloudflare 账户与 runtime 的限制仍然适用，具体数值应查阅当前的
+[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)。
+
+## 8. 仓库结构
 
 ```text
-worker::event(scheduled)
-  → OAuthRefreshService
-  → CloudflareOAuthHttpClient / CloudflareClock / OAuthRepository
-  → KV
+.
+├── src/                    React 管理端
+├── worker-rs/              Rust/Wasm Worker
+│   └── src/
+│       ├── application/
+│       ├── auth/
+│       ├── core/
+│       ├── http/
+│       ├── protocol/
+│       ├── transport/
+│       └── upstream/
+├── docs/                   项目文档
+├── .github/workflows/      CI 与生产部署工作流
+├── vite.config.ts          React、Rust watcher 与 Cloudflare Vite 集成
+├── wrangler.jsonc          Worker、Assets、KV、secret 与 Cron 配置
+└── package.json            项目脚本与 JavaScript 依赖
 ```
 
-## 正文、响应与状态机
+## 9. 架构不变量
 
-- `http::LimitedBodyCollector` 统一执行编码体上限；JSON parser 对 zstd 解码结果再次限界。
-- 无需改写的 Responses/compact 正文保留原编码字节；需要改写时才重新序列化 JSON 并
-  清理 `Content-Encoding`/`Content-Length`。
-- 透明代理直接复用 Worker `ReadableStream`，不复制图片、音频或其他大正文。
-- Chat、Completions、Anthropic 与 Gemini 的流转换是 Rust 状态机；transport 逐块解码
-  Codex SSE，并通过 `async-stream` 产生下游背压流。
-- Responses WebSocket bridge 使用 `allowHalfOpen` 协调关闭；仅 client → upstream 的
-  Responses 文本事件进入纯适配函数，二进制及反向帧保持不变。
-- runtime-neutral `ResponseDto` 统一 CORS、header allow/deny policy、手动内容编码和
-  provider error envelope，Worker adapter 只负责保留真实 body/socket handle。
-
-## 稳定契约
-
-- 未匹配路由、不支持的方法和无效客户端 key 均返回无正文、无 CORS 的 `404`。
-- 只有已确认的公开 API 响应会添加 CORS；已知 API 路径支持无鉴权 `OPTIONS`。管理路由
-  不添加 CORS，并要求 Cookie 会话及同源写请求。
-- Static Assets 不启用全站 SPA fallback。Worker 只在隐藏管理路径读取 `index.html`，
-  每次返回前替换 CSP nonce 占位符，其他未匹配路径保持隐藏式 `404`。
-- Worker 生成的错误按入口协议使用 OpenAI、Anthropic 或 Google envelope；透明代理
-  删除 cookie、hop-by-hop、Cloudflare 与内部服务 header，同时保留媒体、Range 与
-  WebSocket 所需 header。
-- Chat、Completions、Messages、Gemini、Responses 与 compact 的编码 JSON 和 zstd
-  解码结果限制为 4 MiB；Live multipart 为 16 MiB；OAuth、用量和模型目录使用更小的
-  专用上限。其余透明代理路径保持流式。
-- OAuth credentials、`API_KEYS`、设备 state 与管理会话分别使用独立 AES-GCM purpose
-  string。长期 secret 不进入 URL；`ADMIN_PATH` 只是额外隐藏层，不能替代管理密钥。
-- OAuth provider 与 subscription usage 请求叠加固定超时，并把 incoming
-  `AbortSignal` 传给上游；客户端取消、超时、网络、响应过大和 provider 状态使用不同的
-  安全错误分类。
-- `CloudflareSecretStore` 按平台当前最小值接受至少 30 秒的 `cache_ttl`；OAuth/API key
-  常规读取显式使用 30 秒，未指定时保留 Workers KV 默认的 60 秒。
-- KV 的设备登录检查后写入和 `API_KEYS` 读改写不是原子事务；面板面向低频、单管理员
-  配置。需要并发排他或事务语义时迁移到 Durable Object 或 D1。
-- 透明代理的传输兼容不代表上游协议兼容；实际路径与媒体面边界以
-  [兼容矩阵](compatibility.md)为准。
-
-## 构建与验证
-
-`worker-build` 负责编译 Rust crate、运行 `wasm-bindgen` 并生成 Wrangler 可上传的
-`worker-rs/build/index.js` 与 Wasm。Cloudflare Vite 插件负责把该入口、React client、
-Static Assets binding 与本地 workerd 组合为同一个应用。
-
-`pnpm dev` 先生成 dev Wasm，再启动单个 Vite 开发服务器。Vite 中的 Rust watcher 只监听
-`worker-rs/src`、`Cargo.toml` 与 `Cargo.lock`：源码变化后串行运行 `worker-build --dev`，
-生成的 Wasm 变化再触发 Worker runtime 重启；React 源码变化仍走 Fast Refresh。生产构建
-先生成 release Wasm，再由 Vite 输出 client、Worker bundle 与供 Wrangler 使用的配置。
-
-```powershell
-rustup target add wasm32-unknown-unknown
-cargo install worker-build --version 0.8.5 --locked
-pnpm install
-
-pnpm dev
-pnpm build
-pnpm deploy
-```
-
-所有后端业务测试使用 Rust/Cargo；宿主测试不加载 Workers runtime，Wasm check 单独验证
-Cloudflare adapter：
-
-```powershell
-cargo test --manifest-path worker-rs/Cargo.toml --all-targets
-cargo fmt --manifest-path worker-rs/Cargo.toml -- --check
-cargo clippy --manifest-path worker-rs/Cargo.toml --all-targets -- -D warnings
-cargo clippy --manifest-path worker-rs/Cargo.toml --target wasm32-unknown-unknown -- -D warnings
-```
-
-仓库脚本分别提供 `pnpm run test:rust`、`pnpm run check:rust` 和完整的 `pnpm check`。
-修改 `wrangler.jsonc` bindings 后运行 `pnpm exec wrangler types`；部署前使用
-`pnpm build` 生成 Vite 输出配置，再使用 `pnpm exec wrangler deploy --dry-run` 检查最终
-Worker 入口与资源。
-
-## 修改准则
-
-- 新协议先实现纯 `RequestAdapter`/presenter，再由 `AdapterRegistry` factory 注册。
-- 新 tokenizer、provider、clock 或 store 实现通过已有 port 注入，不让协议模块直接
-  读取 `Env` 或发起 Fetch。
-- 新 Codex 后端或路径策略放在 `upstream` 的纯 policy 与 `transport` I/O adapter 两侧，
-  不把 URL/header 分支散落到协议转换器。
-- 只有跨边界的真实替代实现才增加 trait；数据内部的小步骤优先使用普通函数和小模块，
-  避免为单实现制造间接层。
-- 每次变更同时运行宿主 Rust tests、Clippy、fmt、Wasm check；binding 变更再运行
-  Wrangler type generation 与 dry-run。
+- Cloudflare I/O 只能进入 `transport`；内部协议和领域模块保持 runtime-neutral。
+- 新增协议需要同时定义精确路由、请求 adapter、响应 presenter 和传输组合。
+- 未匹配路径、错误方法和无效下游凭据保持隐藏式响应，不暴露受保护能力。
+- 不得为方便转换而无界收集代理正文；新增解析路径必须定义编码体和解码体上限。
+- 不得在模块级缓存 OAuth、API Key、管理会话或请求状态。
+- 配置、路由或协议语义变更必须同步更新 [API 文档](api.md)、
+  [部署文档](deployment.md) 或 [安全文档](security.md)。
