@@ -142,7 +142,7 @@ impl<'a> BodyEditor<'a> {
     }
 }
 
-const REMOVED_RESPONSE_FIELDS: [&str; 11] = [
+const REMOVED_RESPONSE_FIELDS: [&str; 12] = [
     "max_completion_tokens",
     "max_output_tokens",
     "maxOutputTokens",
@@ -152,6 +152,7 @@ const REMOVED_RESPONSE_FIELDS: [&str; 11] = [
     "top_p",
     "truncation",
     "user",
+    "prompt_cache_options",
     "prompt_cache_retention",
     "safety_identifier",
 ];
@@ -240,6 +241,7 @@ mod tests {
             "max_tokens":1024,
             "previous_response_id":"resp_1",
             "generate":true,
+            "prompt_cache_options":{"mode":"implicit"},
             "prompt_cache_retention":"24h",
             "safety_identifier":"safety_1",
             "stream_options":{"include_usage":true},
@@ -264,6 +266,7 @@ mod tests {
             "store":false,
             "previous_response_id":"resp_1",
             "generate":true,
+            "prompt_cache_options":{"mode":"explicit"},
             "prompt_cache_retention":"24h",
             "safety_identifier":"safety_1",
             "stream_options":{"include_usage":true}
@@ -291,6 +294,7 @@ mod tests {
             "context_management":[{"type":"compaction"}],
             "previous_response_id":"resp_1",
             "generate":true,
+            "prompt_cache_options":{"mode":"implicit"},
             "prompt_cache_retention":"24h",
             "safety_identifier":"safety_1",
             "stream_options":{"include_usage":true}

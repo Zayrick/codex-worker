@@ -105,7 +105,8 @@ tool config、thinking 和 usage metadata。`generationConfig` 中仅 thinking l
 - 数组 `input` 中消息项的 `role: "system"` 改为 `role: "developer"`；
 - `store` 固定为 `false`；
 - 删除 `max_completion_tokens`、`max_output_tokens`、`maxOutputTokens`、`max_tokens`、
-  `context_management`、`temperature`、`top_p`、`truncation` 和 `user`；
+  `context_management`、`temperature`、`top_p`、`truncation`、`user` 和
+  `prompt_cache_options`；
 - `service_tier` 仅在值严格等于 `priority` 时保留；
 - 其他未知字段保持不变。
 

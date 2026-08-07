@@ -129,6 +129,7 @@ mod tests {
             "max_tokens":20,
             "previous_response_id":"resp_1",
             "generate":true,
+            "prompt_cache_options":{"mode":"implicit"},
             "prompt_cache_retention":"24h",
             "safety_identifier":"safety_1",
             "stream_options":{"include_usage":true}
@@ -167,7 +168,7 @@ mod tests {
             assert_eq!(adapt_responses_websocket_message(message), message);
         }
         let adapted = adapt_responses_websocket_message(
-            r#"{"type":"response.create","input":"hello","store":true,"previous_response_id":"resp_1","generate":true,"prompt_cache_retention":"24h","safety_identifier":"safety_1","stream_options":{"include_usage":true},"unknown_extension":{"keep":true}}"#,
+            r#"{"type":"response.create","input":"hello","store":true,"previous_response_id":"resp_1","generate":true,"prompt_cache_options":{"mode":"explicit"},"prompt_cache_retention":"24h","safety_identifier":"safety_1","stream_options":{"include_usage":true},"unknown_extension":{"keep":true}}"#,
         );
         let parsed: Value = serde_json::from_str(&adapted).unwrap_or(Value::Null);
         assert_eq!(parsed["store"], false);
@@ -176,6 +177,7 @@ mod tests {
         assert_eq!(parsed["generate"], true);
         assert_eq!(parsed["stream_options"]["include_usage"], true);
         assert_eq!(parsed["unknown_extension"]["keep"], true);
+        assert!(parsed.get("prompt_cache_options").is_none());
         assert!(parsed.get("prompt_cache_retention").is_none());
         assert!(parsed.get("safety_identifier").is_none());
     }
