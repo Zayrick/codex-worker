@@ -144,10 +144,8 @@ relay。
 
 ## 8. 正文、流与 WebSocket
 
-- Chat、Completions、Messages、Gemini、Responses 和 compact 的编码 JSON 与 zstd 解压结果
-  上限均为 4 MiB；
 - Live/Realtime multipart bootstrap 上限为 16 MiB；
-- 图片、Realtime 和其他透明代理正文使用 `ReadableStream`，不受上述应用层 JSON 上限约束；
+- 图片、Realtime 和其他透明代理正文使用 `ReadableStream`；
 - SSE 转换按事件增量处理，并保留下游背压；
 - Responses WebSocket 转发 close code、close reason 和协商后的子协议；
 - 上游拒绝 WebSocket 握手时，Worker 返回经过安全 header 过滤的 HTTP 响应。

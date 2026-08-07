@@ -23,7 +23,7 @@ use worker::{
 use crate::{
     auth::OAuthRepository,
     core::{ApiError, AppResult, JsonObject},
-    http::{LimitedBodyCollector, MAX_JSON_BODY_BYTES, parse_json_body_with_source},
+    http::{LimitedBodyCollector, parse_json_body_with_source},
     protocol::openai::{
         request_policy::apply_converted_response_egress_policy,
         responses::{
@@ -39,7 +39,7 @@ use crate::{
     },
 };
 
-use super::body::{cancel_readable_stream, read_limited_body};
+use super::body::{cancel_readable_stream, read_body, read_limited_body};
 
 const MAX_LIVE_BOOTSTRAP_BODY_BYTES: usize = 16 * 1024 * 1024;
 const WEBSOCKET_PROXY_ERROR: &str = "WebSocket proxy error";
@@ -404,7 +404,7 @@ async fn adapt_json_body<'a>(
     adapt: impl for<'body> Fn(&'body JsonObject) -> Cow<'body, JsonObject>,
 ) -> AppResult<PreparedProxyBody> {
     let content_encoding = headers.get("content-encoding").map(str::to_owned);
-    let encoded = read_limited_body(request, MAX_JSON_BODY_BYTES).await?;
+    let encoded = read_body(request).await?;
     let parsed = parse_json_body_with_source(encoded, content_encoding.as_deref())?;
     let adapted = adapt(&parsed.body);
 

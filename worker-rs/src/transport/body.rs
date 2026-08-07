@@ -3,7 +3,7 @@ use worker::{Request, Response, ResponseBody};
 
 use crate::{
     core::{ApiError, AppResult, JsonObject},
-    http::{LimitedBodyCollector, MAX_JSON_BODY_BYTES, parse_json_body},
+    http::{LimitedBodyCollector, parse_json_body},
 };
 
 pub async fn request_json(request: &mut Request) -> AppResult<JsonObject> {
@@ -11,8 +11,34 @@ pub async fn request_json(request: &mut Request) -> AppResult<JsonObject> {
         .headers()
         .get("content-encoding")
         .map_err(|_| invalid_json())?;
-    let bytes = read_limited_body(request, MAX_JSON_BODY_BYTES).await?;
+    let bytes = read_body(request).await?;
     parse_json_body(bytes.as_deref(), content_encoding.as_deref())
+}
+
+pub async fn read_body(request: &mut Request) -> AppResult<Option<Vec<u8>>> {
+    let raw_stream = request.inner().body();
+    if raw_stream.is_none() {
+        return Ok(None);
+    }
+    let mut source = match request.stream() {
+        Ok(source) => source,
+        Err(_) => {
+            cancel_readable_stream(raw_stream.as_ref()).await;
+            return Err(body_unavailable());
+        }
+    };
+    let mut bytes = Vec::new();
+    while let Some(chunk) = source.next().await {
+        match chunk {
+            Ok(chunk) => bytes.extend_from_slice(&chunk),
+            Err(_) => {
+                drop(source);
+                cancel_readable_stream(raw_stream.as_ref()).await;
+                return Err(body_unavailable());
+            }
+        }
+    }
+    Ok(Some(bytes))
 }
 
 pub async fn read_limited_body(
@@ -31,7 +57,7 @@ pub async fn read_limited_body(
         Ok(collector) => collector,
         Err(_) => {
             cancel_readable_stream(raw_stream.as_ref()).await;
-            return Err(request_too_large(max_bytes));
+            return Err(limited_request_too_large());
         }
     };
 
@@ -57,7 +83,7 @@ pub async fn read_limited_body(
         if collector.push_chunk(&chunk).is_err() {
             drop(source);
             cancel_readable_stream(raw_stream.as_ref()).await;
-            return Err(request_too_large(max_bytes));
+            return Err(limited_request_too_large());
         }
     }
     Ok(Some(collector.finish()))
@@ -138,13 +164,8 @@ fn body_unavailable() -> ApiError {
         .with_code("invalid_request_body")
 }
 
-fn request_too_large(max_bytes: usize) -> ApiError {
-    let message = if max_bytes == MAX_JSON_BODY_BYTES {
-        "The request body is too large.".to_owned()
-    } else {
-        "The management request body is too large.".to_owned()
-    };
-    ApiError::new(413, message)
+fn limited_request_too_large() -> ApiError {
+    ApiError::new(413, "The management request body is too large.")
         .with_kind("invalid_request_error")
         .with_code("request_too_large")
 }

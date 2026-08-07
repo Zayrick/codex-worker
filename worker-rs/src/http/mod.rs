@@ -9,10 +9,7 @@ mod limited_body;
 mod response;
 mod sse_encoder;
 
-pub use body::{
-    MAX_JSON_BODY_BYTES, ParsedJsonBody, has_zstd_encoding, parse_json_body,
-    parse_json_body_chunks, parse_json_body_chunks_with_source, parse_json_body_with_source,
-};
+pub use body::{ParsedJsonBody, has_zstd_encoding, parse_json_body, parse_json_body_with_source};
 pub use limited_body::{BodySizeLimitError, LimitedBodyCollector, collect_limited_body};
 pub use response::{
     BLOCKED_PROXY_RESPONSE_HEADERS, CORS_ALLOWED_HEADERS, CORS_EXPOSED_HEADERS, HeaderDto,
