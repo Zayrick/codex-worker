@@ -1,4 +1,3 @@
-use serde_json::json;
 use worker::{
     AbortSignal, Fetch, Headers, Method, Request, RequestInit, RequestRedirect, Response,
     ResponseBody,
@@ -7,7 +6,9 @@ use worker::{
 use crate::{
     application::UsageNotification,
     core::AppResult,
-    upstream::bark::{BARK_PUSH_REQUEST_TIMEOUT_MS, bark_push_unavailable, parse_bark_push_url},
+    upstream::bark::{
+        BARK_PUSH_REQUEST_TIMEOUT_MS, bark_push_payload, bark_push_unavailable, parse_bark_push_url,
+    },
 };
 
 use super::body::cancel_readable_stream;
@@ -28,12 +29,8 @@ impl BarkClient {
         headers
             .set("content-type", "application/json; charset=utf-8")
             .map_err(|_| bark_push_unavailable())?;
-        let body = serde_json::to_string(&json!({
-            "title": notification.title.as_str(),
-            "body": notification.body.as_str(),
-            "group": "codex-worker",
-        }))
-        .map_err(|_| bark_push_unavailable())?;
+        let payload = bark_push_payload(&notification.title, &notification.body);
+        let body = serde_json::to_string(&payload).map_err(|_| bark_push_unavailable())?;
         let mut init = RequestInit::new();
         init.with_method(Method::Post)
             .with_headers(headers)
