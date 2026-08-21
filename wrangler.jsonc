@@ -41,21 +41,22 @@
 		"required": [
 			"ADMIN_PATH",
 			"ADMIN_SECRET",
+			"BARK_PUSH_URL",
 			"CHATGPT_RELAY_URL",
 			"DATA_ENCRYPTION_KEY"
 		]
 	},
 
-	// Stores encrypted API-key and OAuth credential envelopes.
+	// Stores encrypted API-key, OAuth credential, and Codex usage envelopes.
 	"kv_namespaces": [
 		{
 			"binding": "AUTH_KV"
 		}
 	],
 
-	// Refresh OAuth credentials hourly when they expire within three hours.
+	// Sample Codex usage and check OAuth refresh every five minutes.
 	"triggers": {
-		"crons": ["0 * * * *"]
+		"crons": ["*/5 * * * *"]
 	}
 
 	/**

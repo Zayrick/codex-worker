@@ -30,6 +30,10 @@ impl WorkerConfig {
         required_string(env, "CHATGPT_RELAY_URL")
     }
 
+    pub fn bark_push_url(env: &Env) -> AppResult<String> {
+        required_string(env, "BARK_PUSH_URL")
+    }
+
     pub fn require_relay_origin(&self) -> AppResult<&str> {
         self.relay_origin
             .as_deref()

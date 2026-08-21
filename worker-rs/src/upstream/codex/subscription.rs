@@ -2,7 +2,7 @@ use base64::{
     Engine as _,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
 
@@ -17,7 +17,7 @@ const MIN_MONTH_SECONDS: f64 = 28.0 * 24.0 * 60.0 * 60.0;
 const MAX_MONTH_SECONDS: f64 = 31.0 * 24.0 * 60.0 * 60.0;
 const MAX_JAVASCRIPT_DATE_MS: f64 = 8_640_000_000_000_000.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexQuotaWindowKind {
     FiveHour,
@@ -49,7 +49,7 @@ impl CodexQuotaWindowKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexQuotaCategory {
     Codex,

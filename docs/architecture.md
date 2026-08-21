@@ -16,6 +16,7 @@ Codex Worker 将多种客户端协议收敛到 ChatGPT Codex 上游，同时保�
                          ┌──────────────────────────────┐
 API clients ────────────→│                              │
                          │ Cloudflare Worker            │──→ trusted relay ─→ chatgpt.com
+                         │                              │──→ Bark HTTPS endpoint
 Admin browser ──────────→│ Rust/Wasm backend            │──→ auth.openai.com
                          │                              │──→ api.openai.com
                          └──────────┬───────────┬───────┘
@@ -29,11 +30,12 @@ Admin browser ──────────→│ Rust/Wasm backend            
 | 组件 | 职责 |
 | --- | --- |
 | React 管理端 | 管理会话登录、OAuth 设备授权、订阅额度展示和 API Key 管理 |
-| Rust/Wasm Worker | 路由、鉴权、协议转换、上游访问、流式传输和定时刷新 |
-| `AUTH_KV` | 保存加密后的 OAuth 凭据与下游 API Key 集合 |
+| Rust/Wasm Worker | 路由、鉴权、协议转换、上游访问、流式传输和定时维护 |
+| `AUTH_KV` | 保存加密后的 OAuth 凭据、下游 API Key 集合和 Codex 用量状态 |
 | Static Assets | 保存 Vite 构建的管理端资源；HTML 仅由隐藏管理路径读取 |
 | ChatGPT relay | 代表 Worker 访问 `chatgpt.com` 的 Codex 与用量路径 |
 | OpenAI 直连端点 | 承载 OAuth 设备流、token 刷新和 Realtime sideband |
+| Bark endpoint | 接收用量百分比、剩余时间和消耗速度提醒 |
 
 relay 是外部运维组件，不属于本仓库的构建产物。Worker 只接受一个精确的 HTTPS origin，
 并自行追加上游路径。
@@ -59,8 +61,8 @@ transport ──→ application ──→ protocol ──→ core
 | `protocol` | OpenAI、Anthropic、Gemini 的请求与响应转换 | 不发起网络请求，不访问绑定 |
 | `auth` | OAuth、API Key、会话、加密和存储抽象 | 通过窄接口访问时钟、HTTP 和持久化 |
 | `upstream/codex` | Codex URL、header、模型和订阅数据策略 | 保持纯策略逻辑，可独立测试 |
-| `application` | 路由模型、adapter registry 和 tokenizer 组合 | 编排协议能力，不执行 Cloudflare I/O |
-| `transport` | Workers Request/Response、KV、Fetch、Assets、流和 WebSocket | 唯一 Cloudflare I/O 边界 |
+| `application` | 路由模型、adapter registry、tokenizer 与用量告警状态机 | 编排协议能力，不执行 Cloudflare I/O |
+| `transport` | Workers Request/Response、KV、Fetch、Bark、Assets、流和 WebSocket | 唯一 Cloudflare I/O 边界 |
 
 `lib.rs` 是事件组合入口。仅 `wasm32` 构建导出 `fetch` 和 `scheduled` 事件，因而内部模块可以
 直接在宿主目标运行单元测试。
@@ -119,20 +121,32 @@ hidden admin path
 管理路由不启用 CORS。页面只在精确的 `/<ADMIN_PATH>/admin` 路径返回，不配置全站 SPA
 fallback。
 
-### 5.4 定时刷新
+### 5.4 定时维护
 
-`scheduled` 事件每小时检查 OAuth 凭据。仅当 access token 将在三小时内过期时才调用
-OpenAI token endpoint；普通 API 请求不会发起刷新，避免多个边缘位置同时使用旋转式
+`scheduled` 事件每 5 分钟运行一次。每次运行会通过受信任 relay 获取 Codex 用量，计算每个
+Codex 额度窗口的额度剩余百分比、剩余毫秒数和剩余时间百分比，然后把当前快照与告警状态加密
+写入 KV。用量请求和 Bark 请求均限制为 10 秒，Bark 响应正文直接丢弃且不跟随重定向。
+
+告警按单个 Codex 额度窗口判断，并把同一轮的多项提醒合并为一次 Bark 推送：
+
+- 当前额度剩余百分比首次低于剩余时间百分比时推送；
+- 上一轮处于上述状态且首次提醒已送达时，计算
+  `上次剩余额度 × 实际采样间隔 ÷ 上次剩余时间`；本轮实际消耗严格大于该均匀消耗额度时再次
+  推送。Cron 延迟或漏跑时使用实际采样间隔，而不是固定假定为 5 分钟。
+
+同一轮随后直接读取 KV 中 `oauth` 记录的 `expiresAt`。仅当 access token 将在三小时内过期时
+才调用 OpenAI token endpoint；普通 API 请求不会发起刷新，避免多个边缘位置同时使用旋转式
 refresh token。
 
 ## 6. 持久化与状态
 
-`AUTH_KV` 使用两个固定键：
+`AUTH_KV` 使用三个固定键：
 
 | KV key | 内容 | 保护方式 |
 | --- | --- | --- |
 | `oauth` | access token、refresh token、账户信息和过期时间 | AES-256-GCM envelope |
 | `API_KEYS` | 下游 API Key 数组 | AES-256-GCM envelope |
+| `CODEX_USAGE` | 最近一次用量快照、剩余时间和告警状态 | AES-256-GCM envelope |
 
 设备授权 state 和管理会话不写入 KV，而是使用独立 purpose 加密后交由客户端保存。所有 envelope
 由 `DATA_ENCRYPTION_KEY` 派生同一 AES-256-GCM 密钥，并通过不同的附加认证数据隔离用途。

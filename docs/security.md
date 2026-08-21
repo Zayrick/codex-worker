@@ -21,11 +21,13 @@ relay 主机及 OpenAI 账户的安全由部署者负责。
 | --- | --- | --- |
 | `ADMIN_PATH` | 隐藏管理入口，降低无目标扫描 | 旧管理 URL 失效 |
 | `ADMIN_SECRET` | 验证管理登录，并参与会话绑定 | 所有现有管理会话失效 |
+| `BARK_PUSH_URL` | 指定包含设备 key 的 Bark HTTPS 推送端点 | 后续用量提醒切换到新设备或服务 |
 | `CHATGPT_RELAY_URL` | 指定受信任上游 relay | 后续流量切换到新信任主体 |
-| `DATA_ENCRYPTION_KEY` | 加密持久化凭据、设备 state 与管理会话 | 现有加密数据和会话无法读取 |
+| `DATA_ENCRYPTION_KEY` | 加密持久化凭据、用量、设备 state 与管理会话 | 现有加密数据和会话无法读取 |
 
-`ADMIN_PATH` 是纵深防御措施，不是认证因子。`DATA_ENCRYPTION_KEY` 必须是 32 个随机字节的
-无填充 base64url 编码，并与其他 secret 独立生成。
+`ADMIN_PATH` 是纵深防御措施，不是认证因子。`BARK_PUSH_URL` 的路径包含设备 key，必须按凭据
+保护。`DATA_ENCRYPTION_KEY` 必须是 32 个随机字节的无填充 base64url 编码，并与其他 secret
+独立生成。
 
 secret 只应存放于 Cloudflare secret、开发机 `.dev.vars` 或一次性部署使用的
 `.env.production`。不得写入 `wrangler.jsonc` 的 `vars`、源码、测试 fixture、日志、Issue 或
@@ -33,15 +35,16 @@ CI 输出。
 
 ## 3. 持久化加密
 
-`AUTH_KV` 中只有两个长期记录：
+`AUTH_KV` 中有三个长期记录：
 
 | KV key | 明文内容 | 存储形式 |
 | --- | --- | --- |
 | `oauth` | access token、refresh token、账户 ID、邮箱和过期时间 | AES-256-GCM envelope |
 | `API_KEYS` | API Key 名称、值和启用状态 | AES-256-GCM envelope |
+| `CODEX_USAGE` | 订阅类型、用量百分比、额度重置时间和告警状态 | AES-256-GCM envelope |
 
-每次写入生成新的 12 字节 IV。OAuth、API Key、设备授权 state 和管理会话使用不同的 purpose
-作为 AES-GCM 附加认证数据，防止一种用途的密文被重放到另一用途。
+每次写入生成新的 12 字节 IV。OAuth、API Key、Codex 用量、设备授权 state 和管理会话使用
+不同的 purpose 作为 AES-GCM 附加认证数据，防止一种用途的密文被重放到另一用途。
 
 API Key 在 KV 中是可恢复的加密值，以便管理端显示和编辑；它不是不可逆哈希。公开请求鉴权会
 先对输入和候选 Key 计算 SHA-256，再进行恒定时间比较。
@@ -102,6 +105,12 @@ no-store`。重定向使用手动模式，避免 OAuth 自动重放到未知 ori
 OAuth 设备授权与刷新直连 `auth.openai.com`；Realtime sideband 直连 `api.openai.com`；
 ChatGPT Codex 与订阅用量请求发送到配置的 relay。relay origin 必须通过 HTTPS 精确匹配校验。
 
+Bark 推送只包含额度窗口名称、额度剩余百分比、剩余时间百分比、采样间隔和消耗速度，不包含
+OAuth、账户 ID、邮箱、API Key 或模型请求内容。`BARK_PUSH_URL` 必须是无 userinfo、query、
+fragment 和尾部斜杠的精确 HTTPS 端点；Worker 对 Bark 响应使用手动重定向策略，避免把设备
+key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受该服务能够看到上述用量元数据；
+否则应使用受信任的自托管 Bark 服务。
+
 ## 7. KV 一致性与撤销语义
 
 Workers KV 是最终一致存储。本项目对 OAuth 和 API Key 常规读取显式使用 30 秒
@@ -110,6 +119,7 @@ Workers KV 是最终一致存储。本项目对 OAuth 和 API Key 常规读取�
 - 停用、删除或轮换 API Key 不保证全球即时生效；
 - 删除 OAuth 不保证所有边缘位置立即停止看到旧记录；
 - `API_KEYS` 的并发读改写可能发生最后写入者覆盖；
+- `CODEX_USAGE` 的连续快照可能短暂读取到上一轮状态，从而延迟或重复一次 Bark 提醒；
 - 该管理面适用于低频、单管理员操作，不提供事务保证。
 
 当前平台语义见 [Workers KV consistency](https://developers.cloudflare.com/kv/concepts/how-kv-works/)
@@ -118,9 +128,9 @@ Workers KV 是最终一致存储。本项目对 OAuth 和 API Key 常规读取�
 
 ## 8. OAuth 生命周期
 
-普通 API 请求只接受尚未过期的 OAuth 凭据，不在请求路径中刷新 token。Cron Trigger 每小时
-检查一次；凭据将在三小时内过期时执行刷新。刷新请求最长等待 10 秒，对网络错误、HTTP 429
-和 5xx 最多尝试三次。
+普通 API 请求只接受尚未过期的 OAuth 凭据，不在请求路径中刷新 token。Cron Trigger 每 5 分钟
+直接检查 KV 中 OAuth 凭据的 `expiresAt`；凭据将在三小时内过期时执行刷新。刷新请求最长等待
+10 秒，对网络错误、HTTP 429 和 5xx 最多尝试三次。
 
 这种设计降低了多个边缘 isolate 同时消费旋转式 refresh token 的风险，但不提供全局锁。
 部署者应监控定时刷新失败的固定错误 code，并通过管理界面在必要时重新授权。
@@ -141,6 +151,7 @@ Worker 日志只应包含固定事件名、状态和安全错误 code。禁止�
 - 请求或响应正文；
 - OAuth token、refresh token 或账户凭据；
 - 下游 API Key 或管理密钥；
+- Bark 设备 URL 或设备 key；
 - 管理 Cookie、设备 state、IV 或密文；
 - `.dev.vars`、`.env.production` 或 Cloudflare/GitHub 部署凭据。
 

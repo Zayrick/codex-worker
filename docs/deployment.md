@@ -12,6 +12,7 @@
 | Cloudflare | 可部署 Workers、Static Assets、KV 和 Cron Trigger 的账户 |
 | OpenAI | 可完成 Codex 设备授权的账户 |
 | relay | 由部署者控制的 ChatGPT HTTPS reverse proxy |
+| Bark | Bark App 提供的设备端点，或兼容的自托管 HTTPS 服务 |
 
 安装工具和依赖：
 
@@ -29,9 +30,9 @@ pnpm install --frozen-lockfile
 | --- | --- | --- |
 | Worker entry | `worker-rs/build/index.js` | `worker-build` 生成的 Rust/Wasm 入口 |
 | Static Assets binding | `ASSETS` | React 管理端资源 |
-| KV binding | `AUTH_KV` | 加密的 OAuth 与 API Key 数据 |
+| KV binding | `AUTH_KV` | 加密的 OAuth、API Key 与 Codex 用量状态 |
 | Variable | `CORS_ORIGIN=*` | 公开 API 的单一 CORS origin |
-| Cron Trigger | `0 * * * *` | 每小时检查 OAuth 刷新 |
+| Cron Trigger | `*/5 * * * *` | 每 5 分钟采集用量、执行 Bark 告警并检查 OAuth 刷新 |
 | Observability | enabled | 结构化 Worker 日志与 source map |
 
 `AUTH_KV` 未声明 namespace ID，因此 Wrangler 当前会使用
@@ -45,11 +46,16 @@ namespace 中的数据由当前 `DATA_ENCRYPTION_KEY` 加密。
 | --- | --- | --- |
 | `ADMIN_PATH` | 1–128 个 ASCII 字母、数字、`_` 或 `-` | 构成隐藏管理路径 |
 | `ADMIN_SECRET` | 独立生成的高强度随机值 | 验证管理登录并绑定会话 |
+| `BARK_PUSH_URL` | `https://<host>/<device-key>` | 接收 Codex 用量和消耗速度提醒 |
 | `CHATGPT_RELAY_URL` | 精确 HTTPS origin | ChatGPT Codex 与用量请求的 relay |
 | `DATA_ENCRYPTION_KEY` | 32 个随机字节的无填充 base64url | 加密持久化凭据和会话状态 |
 
 `CHATGPT_RELAY_URL` 必须类似 `https://relay.example.com`，不能包含路径、查询参数、fragment、
 userinfo 或尾部 `/`。Worker 会自行追加所有上游路径。
+
+`BARK_PUSH_URL` 必须是 Bark 设备端点，例如 `https://api.day.app/<device-key>`。它必须使用
+HTTPS，不能包含 userinfo、query、fragment 或尾部 `/`。自托管 Bark 可使用带路径前缀的端点，
+只要最后一段仍是设备 key。
 
 可使用以下命令生成随机值；每个 secret 必须单独生成：
 
@@ -59,6 +65,12 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'
 
 `wrangler.jsonc` 中的 `secrets.required` 会在本地开发和部署时校验 secret 名称。生产 secret
 的值保存在 Cloudflare，不应写入 Wrangler 配置或源码。
+
+现有部署需要先以交互方式补充 Bark secret，再执行普通部署：
+
+```sh
+pnpm exec wrangler secret put BARK_PUSH_URL
+```
 
 ## 4. relay 配置
 
@@ -98,7 +110,7 @@ Windows PowerShell 使用：
 Copy-Item .dev.vars.example .dev.vars
 ```
 
-填写四个 secret 后启动：
+填写五个 secret 后启动：
 
 ```sh
 pnpm dev
@@ -127,6 +139,7 @@ pnpm exec wrangler login
 ```dotenv
 ADMIN_PATH=<random-path-segment>
 ADMIN_SECRET=<independent-random-secret>
+BARK_PUSH_URL=https://api.day.app/<device-key>
 CHATGPT_RELAY_URL=https://relay.example.com
 DATA_ENCRYPTION_KEY=<32-byte-base64url-key>
 ```
@@ -147,7 +160,8 @@ pnpm exec wrangler deploy --secrets-file .env.production
 2. 使用 `ADMIN_SECRET` 登录；
 3. 完成 Codex 设备授权；
 4. 创建并启用至少一个下游 API Key；
-5. 验证健康检查和模型接口。
+5. 等待下一次 5 分钟定时任务，确认 `CODEX_USAGE` 已写入绑定的 KV；
+6. 验证健康检查和模型接口。
 
 不要提交 `.env.production`、`.dev.vars`、`.wrangler/` 或任何构建产物。
 
@@ -184,7 +198,7 @@ workflow 时，`deploy` job 会安装固定版本的工具链并执行 `pnpm dep
 | `CLOUDFLARE_API_TOKEN` | 非交互 Wrangler 部署凭据 |
 | `CLOUDFLARE_ACCOUNT_ID` | 目标 Cloudflare account |
 
-API token 应限制到唯一目标 account，并只授予部署 Worker 及管理项目所用资源所需的权限。四个
+API token 应限制到唯一目标 account，并只授予部署 Worker 及管理项目所用资源所需的权限。五个
 Worker runtime secret 不应复制到 GitHub；它们应在首次部署时写入 Cloudflare。
 
 `deploy` job 在同一个 runner 中完成 Rust/Wasm 构建、Vite 构建和 Wrangler 部署，确保生成
@@ -214,7 +228,8 @@ curl -i https://worker.example.com/v1/models \
 - 管理页只在配置的精确路径可访问；
 - 管理登录、订阅读取和 API Key 编辑正常；
 - relay 支持 SSE 与 WebSocket，而非只支持普通 JSON；
-- Worker 日志不包含 token、API Key、管理密钥或请求正文。
+- 下一次定时任务写入 `CODEX_USAGE`，满足条件时 Bark 能收到提醒；
+- Worker 日志不包含 token、API Key、Bark 设备 URL、管理密钥或请求正文。
 
 ## 10. Secret 与数据变更
 
@@ -222,8 +237,9 @@ curl -i https://worker.example.com/v1/models \
 | --- | --- |
 | 更换 `ADMIN_PATH` | 管理入口立即变更；旧 URL 不再匹配 |
 | 更换 `ADMIN_SECRET` | 旧管理会话立即失效 |
+| 更换 `BARK_PUSH_URL` | 后续提醒发送到新 Bark 设备或服务 |
 | 更换 `CHATGPT_RELAY_URL` | 后续 ChatGPT Codex 与用量请求切换到新 relay |
-| 更换 `DATA_ENCRYPTION_KEY` | 现有 OAuth、API Key、管理会话和未完成设备 state 无法解密 |
+| 更换 `DATA_ENCRYPTION_KEY` | 现有 OAuth、API Key、Codex 用量、管理会话和未完成设备 state 无法解密 |
 | 更换 `AUTH_KV` namespace | 新 Worker 看不到原 namespace 中的凭据 |
 
 没有显式数据迁移方案时，不得轮换 `DATA_ENCRYPTION_KEY` 或切换 `AUTH_KV`。代码回滚也应保留
@@ -233,10 +249,11 @@ curl -i https://worker.example.com/v1/models \
 
 | 现象 | 检查项 |
 | --- | --- |
-| 部署提示缺少 secret | 确认四个 required secret 已上传到目标 Worker |
+| 部署提示缺少 secret | 确认五个 required secret 已上传到目标 Worker |
 | `/healthz` 返回 `404` | 检查 OAuth 是否存在、可解密且未过期 |
 | API 返回空 `404` | 检查路径、方法、API Key 状态、KV binding 和加密密钥 |
 | 上游接口返回错误 | 检查 relay origin、relay 日志策略、OAuth 状态和账户能力 |
+| 没有收到 Bark 提醒 | 检查 `BARK_PUSH_URL`、Cron 日志和当前额度是否满足告警条件 |
 | API Key 变更未立即生效 | 考虑 Workers KV 的跨区域最终一致性 |
 | 部署使用旧产物 | 重新执行 `pnpm build`，再从仓库根目录运行 Wrangler |
 
@@ -247,3 +264,4 @@ curl -i https://worker.example.com/v1/models \
 - [Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
 - [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [Workers KV](https://developers.cloudflare.com/kv/)
+- [Bark push API](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md)

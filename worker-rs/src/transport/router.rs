@@ -1,15 +1,14 @@
-use worker::{Context, Date, Env, Request, Response, ScheduleContext, ScheduledEvent};
+use worker::{Context, Date, Env, Request, Response};
 
 use crate::{
     application::{is_known_api_path, match_admin_route, match_api_route},
-    auth::{ApiKeyRepository, OAuthProvider, OAuthRefreshService, OAuthRepository, client_token},
+    auth::{ApiKeyRepository, OAuthRepository, client_token},
 };
 
 use super::{
     admin::handle_admin,
     api::handle_api,
     config::WorkerConfig,
-    oauth::{CloudflareClock, CloudflareOAuthHttpClient},
     response::{empty, with_cors},
     store::CloudflareSecretStore,
 };
@@ -94,26 +93,4 @@ fn health_failure(error: &crate::core::ApiError) -> worker::Result<Response> {
         })
     );
     empty(404)
-}
-
-pub async fn handle_scheduled(_event: ScheduledEvent, env: Env, _context: ScheduleContext) {
-    let Ok(encryption_key) = WorkerConfig::encryption_key(&env) else {
-        worker::console_error!("scheduled OAuth refresh: invalid Worker configuration");
-        return;
-    };
-    let Ok(store) = CloudflareSecretStore::from_env(&env) else {
-        worker::console_error!("scheduled OAuth refresh: authentication storage unavailable");
-        return;
-    };
-    let credentials = OAuthRepository::new(&store, &encryption_key);
-    let clock = CloudflareClock;
-    let http = CloudflareOAuthHttpClient::new(None);
-    let provider = OAuthProvider::new(&http, &clock);
-    let service = OAuthRefreshService::new(&credentials, &provider, &clock);
-    if let Err(error) = service.refresh(None).await {
-        worker::console_error!(
-            "scheduled OAuth refresh failed: {}",
-            error.code.as_deref().unwrap_or("oauth_refresh_failed")
-        );
-    }
 }

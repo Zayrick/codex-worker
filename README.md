@@ -12,8 +12,8 @@ OpenAI、Anthropic 和 Gemini 风格的接口。
 - 提供 Responses、Chat Completions、Completions、Anthropic Messages 和 Gemini Content 接口；
 - 支持 JSON、SSE、WebSocket、multipart 与二进制流式传输；
 - 通过管理界面完成 Codex 设备授权、订阅额度查看和下游 API Key 管理；
-- 使用 Workers KV 保存 OAuth 凭据与 API Key，并以 AES-256-GCM 加密；
-- 通过 Cron Trigger 定期刷新即将过期的 OAuth 凭据；
+- 使用 Workers KV 保存 OAuth 凭据、API Key 与 Codex 用量快照，并以 AES-256-GCM 加密；
+- 每 5 分钟采集 Codex 用量、刷新即将过期的 OAuth 凭据，并通过 Bark 提醒异常消耗速度；
 - 将 React 管理端与 Rust/Wasm Worker 构建为同一个 Cloudflare 部署单元。
 
 ## 系统组成
@@ -26,6 +26,7 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
                                           │          ├─→ Static Assets
                                           │          ├─→ auth.openai.com
                                           │          ├─→ api.openai.com
+                                          │          ├─→ Bark HTTPS endpoint
                                           │          └─→ trusted HTTPS relay ─→ chatgpt.com
                                           │
                                           └─ API Key authentication
@@ -34,6 +35,10 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
 `CHATGPT_RELAY_URL` 指向的 relay 不包含在本仓库中。它会接收上游 OAuth Bearer、账户标识以及
 请求和响应内容，因此必须由部署者控制、审计并限制访问。完整信任边界见
 [安全模型](docs/security.md)。
+
+`BARK_PUSH_URL` 是 Bark App 提供的 HTTPS 设备端点，例如
+`https://api.day.app/<device-key>`。Worker 只向该端点发送额度百分比、剩余时间和消耗速度，
+不会发送 OAuth、API Key、账户标识或模型请求内容。
 
 ## 环境要求
 
@@ -44,6 +49,7 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
 - `worker-build` 0.8.5；
 - Cloudflare 账户，以及可完成 Codex 设备授权的 OpenAI 账户；
 - 一个受信任的 ChatGPT HTTPS relay。
+- 一个可接收通知的 Bark HTTPS 设备端点。
 
 ## 本地启动
 
@@ -66,6 +72,7 @@ Windows PowerShell 可使用 `Copy-Item .dev.vars.example .dev.vars`。在 `.dev
 ```dotenv
 ADMIN_PATH=<随机 URL 安全路径段>
 ADMIN_SECRET=<高强度管理密钥>
+BARK_PUSH_URL=https://api.day.app/<device-key>
 CHATGPT_RELAY_URL=https://relay.example.com
 DATA_ENCRYPTION_KEY=<32 个随机字节的无填充 base64url 编码>
 ```
@@ -121,7 +128,7 @@ curl https://worker.example.com/v1/models \
 ## 使用约束
 
 - `DATA_ENCRYPTION_KEY` 是持久化数据的根密钥。没有迁移方案时不得更换，否则现有 OAuth
-  凭据和 API Key 将无法解密。
+  凭据、API Key 和 Codex 用量状态将无法解密。
 - API Key 启停、删除和 OAuth 退出受 Workers KV 最终一致性影响，不保证全球即时生效。
 - 管理路径只提供额外的入口隐藏，不替代 `ADMIN_SECRET`、会话校验和同源校验。
 - 部署者应确认自身对相关账户、上游服务和网络基础设施的使用符合适用条款与政策。

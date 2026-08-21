@@ -2,7 +2,7 @@ use async_trait::async_trait;
 
 use crate::core::AppResult;
 
-/// Narrow persistence port used by authentication services.
+/// Narrow persistence port used by encrypted repositories.
 ///
 /// The Cloudflare adapter maps this to one KV binding; tests can use an
 /// in-memory implementation without importing Workers runtime types.
