@@ -10,6 +10,7 @@ import {
 	AdminApiClient,
 	AdminApiError,
 	AdminSessionExpiredError,
+	type AuthProxySettings,
 	type ClientApiKey,
 	type DeviceAuthorization,
 	type OAuthStatus,
@@ -23,6 +24,7 @@ const MANAGEMENT_PATH_PATTERN = /^\/[A-Za-z0-9_-]{1,128}\/admin\/?$/;
 const MIN_API_KEY_LENGTH = 11;
 const MAX_API_KEY_LENGTH = 512;
 const GENERATED_API_KEY_LENGTH = 20;
+const MAX_ACCOUNT_ID_LENGTH = 256;
 const API_KEY_INPUT_PATTERN = String.raw`(?=.*[A-Za-z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s]).{${MIN_API_KEY_LENGTH},${MAX_API_KEY_LENGTH}}`;
 
 type Screen = "loading" | "login" | "dashboard" | "invalid-path";
@@ -48,6 +50,12 @@ function App() {
 	const [subscriptionLoading, setSubscriptionLoading] = useState(false);
 	const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
 	const [apiKeys, setApiKeys] = useState<ClientApiKey[]>([]);
+	const [authProxy, setAuthProxy] = useState<AuthProxySettings>({
+		host: null,
+		enabled: false,
+		allowedAccountIds: [],
+	});
+	const [authProxySaving, setAuthProxySaving] = useState(false);
 	const [keysRefreshing, setKeysRefreshing] = useState(false);
 	const [keysToggling, setKeysToggling] = useState<ReadonlySet<string>>(
 		() => new Set(),
@@ -107,6 +115,7 @@ function App() {
 			setOAuth(state.oauth);
 			setSubscription(state.subscription);
 			setApiKeys(state.apiKeys);
+			setAuthProxy(state.authProxy);
 			setScreen("dashboard");
 			setLoginError(null);
 			if (state.oauth) {
@@ -357,6 +366,31 @@ function App() {
 		}
 	}
 
+	async function saveAuthProxy(
+		next: AuthProxySettings,
+		successText: string,
+	): Promise<boolean> {
+		if (!api || authProxySaving) return false;
+		setAuthProxySaving(true);
+		try {
+			const saved = await api.updateAuthProxy({
+				enabled: next.enabled,
+				allowedAccountIds: next.allowedAccountIds,
+			});
+			if (!mountedRef.current) return false;
+			setAuthProxy(saved);
+			showNotice(successText, "success");
+			return true;
+		} catch (error) {
+			if (!handleSessionFailure(error)) {
+				showNotice(errorMessage(error, "保存凭据替换配置失败。"), "error");
+			}
+			return false;
+		} finally {
+			if (mountedRef.current) setAuthProxySaving(false);
+		}
+	}
+
 	async function copyText(value: string, label: string): Promise<void> {
 		try {
 			await navigator.clipboard.writeText(value);
@@ -379,6 +413,7 @@ function App() {
 		setOAuth(null);
 		setSubscription(null);
 		setApiKeys([]);
+		setAuthProxy({ host: null, enabled: false, allowedAccountIds: [] });
 		keyTogglingRef.current = new Set();
 		setKeysToggling(new Set());
 		setDeviceAuthorization(null);
@@ -431,6 +466,12 @@ function App() {
 					onRemove={() => void removeOAuth()}
 					onRetry={() => void beginDeviceLogin()}
 					subscription={subscription}
+				/>
+
+				<AuthProxyCard
+					loading={authProxySaving}
+					onSave={saveAuthProxy}
+					settings={authProxy}
 				/>
 
 				<ApiKeysCard
@@ -912,6 +953,158 @@ function QuotaRingLegend({
 			<strong>{label}</strong>
 			<span>{quotaCompactValue(window)}</span>
 		</div>
+	);
+}
+
+interface AuthProxyCardProps {
+	settings: AuthProxySettings;
+	loading: boolean;
+	onSave: (settings: AuthProxySettings, successText: string) => Promise<boolean>;
+}
+
+function AuthProxyCard({ settings, loading, onSave }: AuthProxyCardProps) {
+	const [accountId, setAccountId] = useState("");
+	const [inputError, setInputError] = useState<string | null>(null);
+
+	async function addAccountId(event: FormEvent<HTMLFormElement>): Promise<void> {
+		event.preventDefault();
+		if (loading) return;
+		const normalized = accountId.trim();
+		if (!validAccountId(normalized)) {
+			setInputError("account_id 必须是 1–256 位可见 ASCII 字符。");
+			return;
+		}
+		if (settings.allowedAccountIds.includes(normalized)) {
+			setInputError("该 account_id 已在许可列表中。");
+			return;
+		}
+		if (settings.allowedAccountIds.length >= 100) {
+			setInputError("许可列表最多保存 100 个 account_id。");
+			return;
+		}
+
+		const saved = await onSave(
+			{
+				...settings,
+				allowedAccountIds: [...settings.allowedAccountIds, normalized],
+			},
+			"account_id 已加入许可列表。",
+		);
+		if (saved) {
+			setAccountId("");
+			setInputError(null);
+		}
+	}
+
+	return (
+		<section className="card auth-proxy-card" aria-labelledby="auth-proxy-title">
+			<CardHeader
+				id="auth-proxy-title"
+				action={
+					<label className="proxy-enable-switch">
+						<span>{settings.enabled ? "已启用" : "已关闭"}</span>
+						<input
+							aria-label={settings.enabled ? "关闭凭据替换" : "启用凭据替换"}
+							checked={settings.enabled}
+							className="switch-control"
+							disabled={loading}
+							onChange={() => {
+								const enabled = !settings.enabled;
+								void onSave(
+									{ ...settings, enabled },
+									`凭据替换已${enabled ? "启用" : "关闭"}。`,
+								);
+							}}
+							type="checkbox"
+						/>
+					</label>
+				}
+				title={`凭据替换${settings.allowedAccountIds.length > 0 ? ` · ${settings.allowedAccountIds.length}` : ""}`}
+			/>
+
+			<p className="proxy-host">
+				<span>Host</span>
+				<code>{settings.host ?? "—"}</code>
+			</p>
+
+			<form className="auth-form proxy-add-form" onSubmit={(event) => void addAccountId(event)}>
+				<label htmlFor="proxy-account-id">许可 account_id</label>
+				<div className="proxy-add-row">
+					<input
+						id="proxy-account-id"
+						autoComplete="off"
+						disabled={loading}
+						maxLength={MAX_ACCOUNT_ID_LENGTH}
+						onChange={(event) => {
+							setAccountId(event.target.value);
+							setInputError(null);
+						}}
+						placeholder="例如：account-..."
+						required
+						spellCheck={false}
+						type="text"
+						value={accountId}
+					/>
+					<button className="button button-primary" disabled={loading} type="submit">
+						<Icon name="plus" />
+						添加
+					</button>
+				</div>
+				{inputError ? <span className="field-error">{inputError}</span> : null}
+			</form>
+
+			{settings.allowedAccountIds.length === 0 ? (
+				<div className="empty-state proxy-empty-state">
+					<strong>暂无许可 account_id</strong>
+				</div>
+			) : (
+				<div className="table-wrap">
+					<table className="proxy-table">
+						<thead>
+							<tr>
+								<th scope="col">account_id</th>
+								<th scope="col" className="actions-column">操作</th>
+							</tr>
+						</thead>
+						<tbody>
+							{settings.allowedAccountIds.map((allowedAccountId) => (
+								<tr key={allowedAccountId}>
+									<td data-label="account_id">
+										<code className="proxy-account-id" title={allowedAccountId}>
+											{allowedAccountId}
+										</code>
+									</td>
+									<td data-label="操作">
+										<div className="row-actions">
+											<button
+												aria-label={`移除 ${allowedAccountId}`}
+												className="icon-button danger-icon-button"
+												disabled={loading}
+												onClick={() => {
+													void onSave(
+														{
+															...settings,
+															allowedAccountIds: settings.allowedAccountIds.filter(
+																(value) => value !== allowedAccountId,
+															),
+														},
+														"account_id 已移出许可列表。",
+													);
+												}}
+												title="移除"
+												type="button"
+											>
+												<Icon name="trash" />
+											</button>
+										</div>
+									</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			)}
+		</section>
 	);
 }
 
@@ -1474,6 +1667,17 @@ function formatCompactDate(value: number): string {
 
 function clampPercent(value: number): number {
 	return Math.max(0, Math.min(100, value));
+}
+
+function validAccountId(value: string): boolean {
+	return (
+		value.length > 0 &&
+		value.length <= MAX_ACCOUNT_ID_LENGTH &&
+		Array.from(value).every((character) => {
+			const code = character.charCodeAt(0);
+			return code >= 0x21 && code <= 0x7e;
+		})
+	);
 }
 
 function maskApiKey(value: string): string {

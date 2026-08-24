@@ -22,6 +22,10 @@ impl WorkerConfig {
         optional_string(env, "ADMIN_PATH")
     }
 
+    pub fn auth_proxy_host(env: &Env) -> Option<String> {
+        optional_string(env, "AUTH_PROXY_HOST")
+    }
+
     pub fn admin_secret(env: &Env) -> AppResult<String> {
         required_string(env, "ADMIN_SECRET")
     }

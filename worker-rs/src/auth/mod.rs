@@ -2,6 +2,7 @@
 
 mod admin_session;
 mod api_keys;
+mod auth_proxy;
 mod credentials;
 mod crypto;
 mod device_flow;
@@ -20,6 +21,7 @@ pub use admin_session::{
 pub use api_keys::{
     ApiKeyRepository, ClientApiKey, authenticate_token, client_token, validate_api_key_input,
 };
+pub use auth_proxy::AuthProxySettings;
 pub use credentials::{
     CodexCredentials, OAuthRepository, OAuthStatus, StoredOAuthCredentials,
     credentials_from_token_response, oauth_status,

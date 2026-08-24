@@ -20,8 +20,8 @@ Codex Worker 通过协议转换、Codex 原生映射和透明传输提供多种�
 
 ## 2. 鉴权与通用行为
 
-除健康检查、已知 API 的预检请求和管理入口外，所有公开 API 都要求一个已启用的下游 API
-Key。支持以下 header，选择优先级固定：
+除健康检查、已知 API 的预检请求、管理入口和 Backend API 凭据代理外，所有公开 API 都要求一个
+已启用的下游 API Key。支持以下 header，选择优先级固定：
 
 1. `Authorization: Bearer <key>`；
 2. `X-Api-Key: <key>`；
@@ -63,6 +63,16 @@ CORS。
 
 一般透明代理路径拒绝 `CONNECT`；`OPTIONS` 由预检逻辑处理。除表中明确限制方法的路径外，
 路由层允许其他 HTTP 方法，上游能力仍由目标 action 决定。
+
+### Backend API 凭据代理
+
+Host 与 `AUTH_PROXY_HOST` 匹配的 `/backend-api` 路径族使用 `CHATGPT_RELAY_URL` 作为上游，
+保留请求方法、路径、Query、流式正文和端到端 header，并直接返回上游 HTTP、SSE 或 WebSocket
+响应。该路由独立于公开 API Key 鉴权和协议转换。
+
+管理端维护全局开关和许可 `account_id`。开关启用且请求中的 `ChatGPT-Account-ID` 精确匹配许可
+列表时，请求中已有的 `Authorization` 和 `ChatGPT-Account-ID` 使用当前 Codex OAuth 凭据替换；
+其他请求按原认证信息转发。
 
 当 `/v1/models` 包含 `client_version` 查询参数时，Worker 保留 Codex CLI 模型目录格式，而
 不转换为 OpenAI model list。
@@ -163,8 +173,10 @@ Cloudflare 的请求、连接和 WebSocket 限制可能变化，请以当前
 - 未匹配路径、错误方法和无效下游 API Key 返回空正文 `404`；
 - Worker 生成的协议错误分别使用 OpenAI、Anthropic 或 Google envelope；
 - 只有已确认的公开 API 响应添加 CORS header；管理响应不添加 CORS；
-- 代理响应和管理响应使用 `Cache-Control: no-store`；
-- Worker 不把客户端 API Key、Cookie 或客户端提供的 ChatGPT 账户 ID 发送到上游。
+- 公开协议 API 和管理响应使用 `Cache-Control: no-store`；Backend API 凭据代理保留上游响应
+  header；
+- 公开协议 API 过滤客户端凭据、Cookie 和账户 ID；Backend API 凭据代理按许可配置处理认证
+  header。
 
 默认 `CORS_ORIGIN` 为 `*`，当前配置只支持一个原样的 origin 值，不实现动态 allowlist，也不
 启用 credentialed CORS。
@@ -190,7 +202,7 @@ React 管理端使用：
 | --- | --- |
 | `POST /login` | 使用 `ADMIN_SECRET` 创建管理会话 |
 | `POST /logout` | 清除管理会话 |
-| `GET /state` | 读取 OAuth 摘要、订阅摘要和 API Key 列表 |
+| `GET /state` | 读取 OAuth 摘要、订阅摘要、API Key 列表和 Backend API 代理设置 |
 | `GET /subscription` | 实时读取订阅与额度 |
 | `POST /oauth/device` | 创建设备授权请求 |
 | `POST /oauth/device/poll` | 轮询设备授权结果 |
@@ -199,7 +211,8 @@ React 管理端使用：
 | `POST /api-keys` | 创建 API Key |
 | `PUT /api-keys` | 更新名称、值或启用状态 |
 | `DELETE /api-keys` | 删除 API Key |
+| `PUT /auth-proxy` | 更新凭据替换启用状态和许可 `account_id` 列表 |
 
-`/state`、`/subscription`、OAuth 和 API Key 端点需要有效的管理会话；登录、退出以及所有
-受保护的管理写请求必须通过同源 `Origin` 校验。管理会话和 API Key 约束见
+`/state`、`/subscription`、OAuth、API Key 和 Backend API 代理端点需要有效的管理会话；登录、退出
+以及所有受保护的管理写请求必须通过同源 `Origin` 校验。管理会话和凭据约束见
 [安全模型](security.md)。

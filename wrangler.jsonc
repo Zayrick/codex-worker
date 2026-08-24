@@ -41,6 +41,7 @@
 		"required": [
 			"ADMIN_PATH",
 			"ADMIN_SECRET",
+			"AUTH_PROXY_HOST",
 			"BARK_PUSH_URL",
 			"CHATGPT_RELAY_URL",
 			"DATA_ENCRYPTION_KEY"

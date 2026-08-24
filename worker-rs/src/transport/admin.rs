@@ -5,13 +5,16 @@ use worker::{AbortSignal, Date, Env, Headers, Method, Request, RequestInit, Resp
 use crate::{
     application::{AdminRoute, MatchedAdminRoute},
     auth::{
-        ApiKeyRepository, DeviceAuthorizationService, DevicePollResult, OAuthProvider,
-        OAuthRepository, admin_secret_matches, admin_session_cookie_header,
+        ApiKeyRepository, AuthProxySettings, DeviceAuthorizationService, DevicePollResult,
+        OAuthProvider, OAuthRepository, admin_secret_matches, admin_session_cookie_header,
         clear_admin_session_cookie_header, create_admin_session, has_valid_admin_session,
         oauth_status,
     },
     core::{ApiError, AppResult, JsonObject},
-    upstream::codex::{codex_subscription_from_usage, codex_subscription_metadata},
+    upstream::{
+        auth_proxy::normalize_auth_proxy_host,
+        codex::{codex_subscription_from_usage, codex_subscription_metadata},
+    },
 };
 
 use super::{
@@ -103,6 +106,7 @@ async fn dispatch(
         AdminRoute::State => {
             let credentials = oauth.read().await?;
             let api_keys = keys.read().await?;
+            let auth_proxy_settings = keys.auth_proxy_settings().await?;
             let oauth_status = credentials.as_ref().map(oauth_status);
             let subscription = credentials
                 .as_ref()
@@ -112,6 +116,7 @@ async fn dispatch(
                     "oauth": oauth_status,
                     "subscription": subscription,
                     "apiKeys": api_keys,
+                    "authProxy": auth_proxy_view(&auth_proxy_settings, env),
                 }),
                 200,
             )
@@ -192,8 +197,26 @@ async fn dispatch(
             let name = body.get("name").cloned().unwrap_or(Value::Null);
             json_response(&json!({ "apiKeys": keys.delete(&name).await? }), 200)
         }
+        AdminRoute::AuthProxyUpdate => {
+            let body = Value::Object(admin_json(request).await?);
+            let settings = keys.update_auth_proxy(&body).await?;
+            json_response(
+                &json!({ "authProxy": auth_proxy_view(&settings, env) }),
+                200,
+            )
+        }
         AdminRoute::Page | AdminRoute::Login | AdminRoute::Logout => Err(invalid_admin_request()),
     }
+}
+
+fn auth_proxy_view(settings: &AuthProxySettings, env: &Env) -> Value {
+    json!({
+        "host": WorkerConfig::auth_proxy_host(env)
+            .as_deref()
+            .and_then(normalize_auth_proxy_host),
+        "enabled": settings.enabled,
+        "allowedAccountIds": settings.allowed_account_ids,
+    })
 }
 
 async fn admin_json(request: &mut Request) -> AppResult<JsonObject> {

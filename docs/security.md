@@ -21,6 +21,7 @@ relay 主机及 OpenAI 账户的安全由部署者负责。
 | --- | --- | --- |
 | `ADMIN_PATH` | 隐藏管理入口，降低无目标扫描 | 旧管理 URL 失效 |
 | `ADMIN_SECRET` | 验证管理登录，并参与会话绑定 | 所有现有管理会话失效 |
+| `AUTH_PROXY_HOST` | 指定 Backend API 凭据代理的入站 Host | 后续请求按新 Host 分流 |
 | `BARK_PUSH_URL` | 指定包含设备 key 的 Bark HTTPS 推送端点 | 后续用量提醒切换到新设备或服务 |
 | `CHATGPT_RELAY_URL` | 指定受信任上游 relay | 后续流量切换到新信任主体 |
 | `DATA_ENCRYPTION_KEY` | 加密持久化凭据、用量、设备 state 与管理会话 | 现有加密数据和会话无法读取 |
@@ -40,11 +41,11 @@ CI 输出。
 | KV key | 明文内容 | 存储形式 |
 | --- | --- | --- |
 | `oauth` | access token、refresh token、账户 ID、邮箱和过期时间 | AES-256-GCM envelope |
-| `API_KEYS` | API Key 名称、值和启用状态 | AES-256-GCM envelope |
+| `API_KEYS` | API Key 名称、值和启用状态，以及凭据替换启用状态和许可 `account_id` 列表 | AES-256-GCM envelope |
 | `CODEX_USAGE` | 订阅类型、用量百分比、额度重置时间和告警状态 | AES-256-GCM envelope |
 
-每次写入生成新的 12 字节 IV。OAuth、API Key、Codex 用量、设备授权 state 和管理会话使用
-不同的 purpose 作为 AES-GCM 附加认证数据，防止一种用途的密文被重放到另一用途。
+每次写入生成新的 12 字节 IV。OAuth、API Key 与代理设置、Codex 用量、设备授权 state 和管理
+会话使用不同的 purpose 作为 AES-GCM 附加认证数据，防止一种用途的密文被重放到另一用途。
 
 API Key 在 KV 中是可恢复的加密值，以便管理端显示和编辑；它不是不可逆哈希。公开请求鉴权会
 先对输入和候选 Key 计算 SHA-256，再进行恒定时间比较。
@@ -90,7 +91,7 @@ API Key 在 KV 中是可恢复的加密值，以便管理端显示和编辑；�
 
 ## 6. 上游请求隔离
 
-发送上游请求前，Worker 删除或重建以下类型的 header：
+普通公开 API 发送上游请求前，Worker 删除或重建以下类型的 header：
 
 - 下游 `Authorization`、`X-Api-Key` 和 `X-Goog-Api-Key`；
 - Cookie、Origin、Referer 和客户端提交的 ChatGPT 账户 ID；
@@ -110,6 +111,12 @@ OAuth、账户 ID、邮箱、API Key 或模型请求内容。`BARK_PUSH_URL` 必
 fragment 和尾部斜杠的精确 HTTPS 端点；Worker 对 Bark 响应使用手动重定向策略，避免把设备
 key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受该服务能够看到上述用量元数据；
 否则应使用受信任的自托管 Bark 服务。
+
+### Backend API 凭据代理
+
+`AUTH_PROXY_HOST` 上的 `/backend-api` 请求将端到端 header 和正文发送到
+`CHATGPT_RELAY_URL`。许可 `account_id` 使用已保存的 Codex OAuth 凭据；其他请求保留原
+Authorization、账户 ID 和 Cookie。该 Host 与 relay 都必须处于部署者控制的信任边界内。
 
 ## 7. KV 一致性与撤销语义
 

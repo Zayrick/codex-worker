@@ -2,6 +2,7 @@
 
 mod admin;
 mod api;
+mod auth_proxy;
 mod bark;
 mod body;
 mod codex;

@@ -876,8 +876,84 @@
 	font-size: 0.76rem;
 }
 
+.auth-proxy-card,
 .keys-card {
 	margin-top: 0.75rem;
+}
+
+.proxy-enable-switch {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+	color: var(--text-secondary);
+	font-size: 0.76rem;
+	font-weight: 650;
+}
+
+.proxy-host {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	gap: 0.6rem;
+	margin: 0 0 0.9rem;
+	color: var(--text-tertiary);
+	font-size: 0.72rem;
+}
+
+.proxy-host code {
+	min-width: 0;
+	overflow: hidden;
+	color: var(--text-secondary);
+	font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.proxy-add-form {
+	display: grid;
+	gap: 0.42rem;
+	margin-bottom: 0.9rem;
+}
+
+.proxy-add-row {
+	display: flex;
+	align-items: stretch;
+	gap: 0.5rem;
+}
+
+.proxy-add-row input {
+	min-width: 0;
+	flex: 1;
+	padding-right: 0.85rem;
+	font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+	font-size: 0.78rem;
+}
+
+.field-error {
+	color: var(--danger);
+	font-size: 0.72rem;
+}
+
+.proxy-empty-state {
+	min-height: 6.5rem;
+}
+
+.proxy-table {
+	table-layout: fixed;
+}
+
+.proxy-table th:first-child {
+	width: 84%;
+}
+
+.proxy-account-id {
+	display: block;
+	overflow: hidden;
+	color: var(--text-secondary);
+	font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+	font-size: 0.74rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .card-actions,
@@ -1407,6 +1483,14 @@ td strong {
 }
 
 @media (max-width: 28rem) {
+	.proxy-add-row {
+		flex-direction: column;
+	}
+
+	.proxy-add-row .button {
+		width: 100%;
+	}
+
 	.auth-card {
 		padding: 1.35rem;
 	}

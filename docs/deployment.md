@@ -30,7 +30,7 @@ pnpm install --frozen-lockfile
 | --- | --- | --- |
 | Worker entry | `worker-rs/build/index.js` | `worker-build` 生成的 Rust/Wasm 入口 |
 | Static Assets binding | `ASSETS` | React 管理端资源 |
-| KV binding | `AUTH_KV` | 加密的 OAuth、API Key 与 Codex 用量状态 |
+| KV binding | `AUTH_KV` | 加密的 OAuth、API Key、Backend API 代理设置与 Codex 用量状态 |
 | Variable | `CORS_ORIGIN=*` | 公开 API 的单一 CORS origin |
 | Cron Trigger | `*/5 * * * *` | 每 5 分钟采集用量、执行 Bark 告警并检查 OAuth 刷新 |
 | Observability | enabled | 结构化 Worker 日志与 source map |
@@ -46,6 +46,7 @@ namespace 中的数据由当前 `DATA_ENCRYPTION_KEY` 加密。
 | --- | --- | --- |
 | `ADMIN_PATH` | 1–128 个 ASCII 字母、数字、`_` 或 `-` | 构成隐藏管理路径 |
 | `ADMIN_SECRET` | 独立生成的高强度随机值 | 验证管理登录并绑定会话 |
+| `AUTH_PROXY_HOST` | 不含 scheme、端口和路径的主机名 | Backend API 凭据代理的入站 Host |
 | `BARK_PUSH_URL` | `https://<host>/<device-key>` | 接收 Codex 用量和消耗速度提醒 |
 | `CHATGPT_RELAY_URL` | 精确 HTTPS origin | ChatGPT Codex 与用量请求的 relay |
 | `DATA_ENCRYPTION_KEY` | 32 个随机字节的无填充 base64url | 加密持久化凭据和会话状态 |
@@ -110,7 +111,7 @@ Windows PowerShell 使用：
 Copy-Item .dev.vars.example .dev.vars
 ```
 
-填写五个 secret 后启动：
+填写六个 secret 后启动：
 
 ```sh
 pnpm dev
@@ -139,6 +140,7 @@ pnpm exec wrangler login
 ```dotenv
 ADMIN_PATH=<random-path-segment>
 ADMIN_SECRET=<independent-random-secret>
+AUTH_PROXY_HOST=proxy.example.com
 BARK_PUSH_URL=https://api.day.app/<device-key>
 CHATGPT_RELAY_URL=https://relay.example.com
 DATA_ENCRYPTION_KEY=<32-byte-base64url-key>
@@ -198,7 +200,7 @@ workflow 时，`deploy` job 会安装固定版本的工具链并执行 `pnpm dep
 | `CLOUDFLARE_API_TOKEN` | 非交互 Wrangler 部署凭据 |
 | `CLOUDFLARE_ACCOUNT_ID` | 目标 Cloudflare account |
 
-API token 应限制到唯一目标 account，并只授予部署 Worker 及管理项目所用资源所需的权限。五个
+API token 应限制到唯一目标 account，并只授予部署 Worker 及管理项目所用资源所需的权限。六个
 Worker runtime secret 不应复制到 GitHub；它们应在首次部署时写入 Cloudflare。
 
 `deploy` job 在同一个 runner 中完成 Rust/Wasm 构建、Vite 构建和 Wrangler 部署，确保生成
@@ -239,7 +241,7 @@ curl -i https://worker.example.com/v1/models \
 | 更换 `ADMIN_SECRET` | 旧管理会话立即失效 |
 | 更换 `BARK_PUSH_URL` | 后续提醒发送到新 Bark 设备或服务 |
 | 更换 `CHATGPT_RELAY_URL` | 后续 ChatGPT Codex 与用量请求切换到新 relay |
-| 更换 `DATA_ENCRYPTION_KEY` | 现有 OAuth、API Key、Codex 用量、管理会话和未完成设备 state 无法解密 |
+| 更换 `DATA_ENCRYPTION_KEY` | 现有 OAuth、API Key、代理许可、Codex 用量、管理会话和未完成设备 state 无法解密 |
 | 更换 `AUTH_KV` namespace | 新 Worker 看不到原 namespace 中的凭据 |
 
 没有显式数据迁移方案时，不得轮换 `DATA_ENCRYPTION_KEY` 或切换 `AUTH_KV`。代码回滚也应保留
@@ -249,7 +251,7 @@ curl -i https://worker.example.com/v1/models \
 
 | 现象 | 检查项 |
 | --- | --- |
-| 部署提示缺少 secret | 确认五个 required secret 已上传到目标 Worker |
+| 部署提示缺少 secret | 确认六个 required secret 已上传到目标 Worker |
 | `/healthz` 返回 `404` | 检查 OAuth 是否存在、可解密且未过期 |
 | API 返回空 `404` | 检查路径、方法、API Key 状态、KV binding 和加密密钥 |
 | 上游接口返回错误 | 检查 relay origin、relay 日志策略、OAuth 状态和账户能力 |

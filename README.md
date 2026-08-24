@@ -11,7 +11,8 @@ OpenAI、Anthropic 和 Gemini 风格的接口。
 
 - 提供 Responses、Chat Completions、Completions、Anthropic Messages 和 Gemini Content 接口；
 - 支持 JSON、SSE、WebSocket、multipart 与二进制流式传输；
-- 通过管理界面完成 Codex 设备授权、订阅额度查看和下游 API Key 管理；
+- 通过管理界面完成 Codex 设备授权、订阅额度查看、下游 API Key 和代理账户许可管理；
+- 在配置的 Host 上代理 `/backend-api/*`，按 `account_id` 选择认证透传或 Codex 凭据替换；
 - 使用 Workers KV 保存 OAuth 凭据、API Key 与 Codex 用量快照，并以 AES-256-GCM 加密；
 - 每 5 分钟采集 Codex 用量、刷新即将过期的 OAuth 凭据，并通过 Bark 提醒异常消耗速度；
 - 将 React 管理端与 Rust/Wasm Worker 构建为同一个 Cloudflare 部署单元。
@@ -29,7 +30,7 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
                                           │          ├─→ Bark HTTPS endpoint
                                           │          └─→ trusted HTTPS relay ─→ chatgpt.com
                                           │
-                                          └─ API Key authentication
+                                          └─ API Key / account policy
 ```
 
 `CHATGPT_RELAY_URL` 指向的 relay 不包含在本仓库中。它会接收上游 OAuth Bearer、账户标识以及
@@ -72,6 +73,7 @@ Windows PowerShell 可使用 `Copy-Item .dev.vars.example .dev.vars`。在 `.dev
 ```dotenv
 ADMIN_PATH=<随机 URL 安全路径段>
 ADMIN_SECRET=<高强度管理密钥>
+AUTH_PROXY_HOST=proxy.example.com
 BARK_PUSH_URL=https://api.day.app/<device-key>
 CHATGPT_RELAY_URL=https://relay.example.com
 DATA_ENCRYPTION_KEY=<32 个随机字节的无填充 base64url 编码>

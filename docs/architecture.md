@@ -29,9 +29,9 @@ Admin browser ──────────→│ Rust/Wasm backend            
 
 | 组件 | 职责 |
 | --- | --- |
-| React 管理端 | 管理会话登录、OAuth 设备授权、订阅额度展示和 API Key 管理 |
+| React 管理端 | 管理会话登录、OAuth 设备授权、订阅额度展示、API Key 与代理账户许可管理 |
 | Rust/Wasm Worker | 路由、鉴权、协议转换、上游访问、流式传输和定时维护 |
-| `AUTH_KV` | 保存加密后的 OAuth 凭据、下游 API Key 集合和 Codex 用量状态 |
+| `AUTH_KV` | 保存加密后的 OAuth 凭据、下游 API Key、Backend API 代理设置和 Codex 用量状态 |
 | Static Assets | 保存 Vite 构建的管理端资源；HTML 仅由隐藏管理路径读取 |
 | ChatGPT relay | 代表 Worker 访问 `chatgpt.com` 的 Codex 与用量路径 |
 | OpenAI 直连端点 | 承载 OAuth 设备流、token 刷新和 Realtime sideband |
@@ -60,7 +60,7 @@ transport ──→ application ──→ protocol ──→ core
 | `http` | 有界正文、响应 DTO 和 SSE 编码 | 使用 runtime-neutral 类型 |
 | `protocol` | OpenAI、Anthropic、Gemini 的请求与响应转换 | 不发起网络请求，不访问绑定 |
 | `auth` | OAuth、API Key、会话、加密和存储抽象 | 通过窄接口访问时钟、HTTP 和持久化 |
-| `upstream/codex` | Codex URL、header、模型和订阅数据策略 | 保持纯策略逻辑，可独立测试 |
+| `upstream` | Codex 与 Backend API 代理的 URL、header、模型和订阅数据策略 | 保持纯策略逻辑，可独立测试 |
 | `application` | 路由模型、adapter registry、tokenizer 与用量告警状态机 | 编排协议能力，不执行 Cloudflare I/O |
 | `transport` | Workers Request/Response、KV、Fetch、Bark、Assets、流和 WebSocket | 唯一 Cloudflare I/O 边界 |
 
@@ -105,6 +105,15 @@ compact 只执行明确规定的 JSON 策略；其他代理正文直接使用 `R
 WebSocket 只处理客户端发往上游的 `response.create` 和 `response.append` 文本帧，其余文本、
 二进制和反向帧保持不变。
 
+`AUTH_PROXY_HOST` 上的 `/backend-api` 请求使用独立代理流程：
+
+```text
+request → account_id policy → credential selection → trusted relay
+```
+
+该流程保持路径、Query、端到端 header 和流式正文，并按管理端许可配置选择原请求凭据或已保存的
+Codex OAuth 凭据。
+
 ### 5.3 管理请求
 
 ```text
@@ -115,7 +124,7 @@ hidden admin path
        → same-origin check for writes
        ├─ OAuth device flow
        ├─ subscription usage
-       └─ encrypted API Key repository
+       └─ encrypted API Key and proxy settings repository
 ```
 
 管理路由不启用 CORS。页面只在精确的 `/<ADMIN_PATH>/admin` 路径返回，不配置全站 SPA
@@ -145,7 +154,7 @@ refresh token。
 | KV key | 内容 | 保护方式 |
 | --- | --- | --- |
 | `oauth` | access token、refresh token、账户信息和过期时间 | AES-256-GCM envelope |
-| `API_KEYS` | 下游 API Key 数组 | AES-256-GCM envelope |
+| `API_KEYS` | 下游 API Key 数组、Backend API 代理开关和许可 `account_id` 列表 | AES-256-GCM envelope |
 | `CODEX_USAGE` | 最近一次用量快照、剩余时间和告警状态 | AES-256-GCM envelope |
 
 设备授权 state 和管理会话不写入 KV，而是使用独立 purpose 加密后交由客户端保存。所有 envelope
@@ -160,9 +169,10 @@ KV 适合本项目的低频写入和高频读取，但其读取最终一致。AP
 - Live/Realtime multipart bootstrap 限制为 16 MiB；
 - 图片、实时媒体信令和其他透明代理正文保持流式；
 - 上游重定向使用手动模式，避免 OAuth 自动发送到未知目标；
-- 客户端凭据、Cookie、账户头、转发头和 hop-by-hop header 不会原样进入上游；
-- 上游 Cookie、服务端标识和内部 header 不会原样返回客户端；
-- 公开 API 和管理面均使用 `Cache-Control: no-store`。
+- 公开协议 API 应用凭据与响应 header 隔离；Backend API 凭据代理保留端到端 header，并由
+  runtime 管理连接级 header；
+- 公开协议 API 和管理面使用 `Cache-Control: no-store`；Backend API 凭据代理保持上游响应
+  语义。
 
 Cloudflare 账户与 runtime 的限制仍然适用，具体数值应查阅当前的
 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/)。

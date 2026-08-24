@@ -46,10 +46,17 @@ export interface ClientApiKey {
 	enabled: boolean;
 }
 
+export interface AuthProxySettings {
+	host: string | null;
+	enabled: boolean;
+	allowedAccountIds: string[];
+}
+
 export interface AdminState {
 	oauth: OAuthStatus | null;
 	subscription: SubscriptionMetadata | null;
 	apiKeys: ClientApiKey[];
+	authProxy: AuthProxySettings;
 }
 
 export interface DeviceAuthorization {
@@ -172,6 +179,16 @@ export class AdminApiClient {
 		);
 	}
 
+	updateAuthProxy(
+		settings: Pick<AuthProxySettings, "enabled" | "allowedAccountIds">,
+	): Promise<AuthProxySettings> {
+		return this.requestJson(
+			"/auth-proxy",
+			jsonRequest("PUT", settings),
+			(value) => parseAuthProxyEnvelope(value).authProxy,
+		);
+	}
+
 	private async submitSessionForm(
 		path: string,
 		body: URLSearchParams | undefined,
@@ -263,6 +280,7 @@ function parseAdminState(value: unknown): AdminState {
 				? null
 				: parseSubscriptionMetadata(value.subscription),
 		apiKeys: value.apiKeys.map(parseClientApiKey),
+		authProxy: parseAuthProxySettings(value.authProxy),
 	};
 }
 
@@ -341,6 +359,24 @@ function parseClientApiKey(value: unknown): ClientApiKey {
 function parseApiKeysEnvelope(value: unknown): { apiKeys: ClientApiKey[] } {
 	if (!isRecord(value) || !Array.isArray(value.apiKeys)) throw invalidPayload();
 	return { apiKeys: value.apiKeys.map(parseClientApiKey) };
+}
+
+function parseAuthProxyEnvelope(value: unknown): {
+	authProxy: AuthProxySettings;
+} {
+	if (!isRecord(value)) throw invalidPayload();
+	return { authProxy: parseAuthProxySettings(value.authProxy) };
+}
+
+function parseAuthProxySettings(value: unknown): AuthProxySettings {
+	if (!isRecord(value) || !Array.isArray(value.allowedAccountIds)) {
+		throw invalidPayload();
+	}
+	return {
+		host: nullableString(value.host),
+		enabled: requiredBoolean(value.enabled),
+		allowedAccountIds: value.allowedAccountIds.map(requiredString),
+	};
 }
 
 function parseDeviceAuthorization(value: unknown): DeviceAuthorization {

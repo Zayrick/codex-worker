@@ -3,11 +3,13 @@ use worker::{Context, Date, Env, Request, Response};
 use crate::{
     application::{is_known_api_path, match_admin_route, match_api_route},
     auth::{ApiKeyRepository, OAuthRepository, client_token},
+    upstream::auth_proxy::matches_auth_proxy_request,
 };
 
 use super::{
     admin::handle_admin,
     api::handle_api,
+    auth_proxy::handle_auth_proxy,
     config::WorkerConfig,
     response::{empty, with_cors},
     store::CloudflareSecretStore,
@@ -42,6 +44,13 @@ pub async fn handle_fetch(
         && let Some(matched) = match_admin_route(&method, url.path(), &admin_path)
     {
         return handle_admin(matched, &mut request, &env, now_ms).await;
+    }
+
+    if WorkerConfig::auth_proxy_host(&env)
+        .as_deref()
+        .is_some_and(|host| matches_auth_proxy_request(host, &url))
+    {
+        return handle_auth_proxy(request, url, &env, now_ms).await;
     }
 
     if method == "OPTIONS" && is_known_api_path(url.path()) {

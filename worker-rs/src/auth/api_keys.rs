@@ -6,7 +6,11 @@ use subtle::ConstantTimeEq;
 
 use crate::core::{ApiError, AppResult};
 
-use super::{SecretStore, open_json, seal_json, sha256};
+use super::{
+    AuthProxySettings, SecretStore,
+    auth_proxy::{validate_settings_input, validate_stored_settings},
+    open_json, seal_json, sha256,
+};
 
 const API_KEYS_KV_KEY: &str = "API_KEYS";
 const API_KEYS_ENVELOPE_PURPOSE: &str = "codex-worker/api-keys/v1";
@@ -28,6 +32,14 @@ pub struct ClientApiKey {
 struct StoredApiKeys {
     version: u8,
     keys: Vec<ClientApiKey>,
+    #[serde(default, rename = "authProxy")]
+    auth_proxy: AuthProxySettings,
+}
+
+#[derive(Debug, Default)]
+struct ApiKeyState {
+    keys: Vec<ClientApiKey>,
+    auth_proxy: AuthProxySettings,
 }
 
 pub struct ApiKeyRepository<'a> {
@@ -41,8 +53,16 @@ impl<'a> ApiKeyRepository<'a> {
     }
 
     pub async fn read(&self) -> AppResult<Vec<ClientApiKey>> {
-        let Some(encrypted) = self.store.get(API_KEYS_KV_KEY, Some(30)).await? else {
-            return Ok(Vec::new());
+        Ok(self.read_state(Some(30)).await?.keys)
+    }
+
+    pub async fn auth_proxy_settings(&self) -> AppResult<AuthProxySettings> {
+        Ok(self.read_state(None).await?.auth_proxy)
+    }
+
+    async fn read_state(&self, cache_ttl: Option<u64>) -> AppResult<ApiKeyState> {
+        let Some(encrypted) = self.store.get(API_KEYS_KV_KEY, cache_ttl).await? else {
+            return Ok(ApiKeyState::default());
         };
         if encrypted.len() > MAX_API_KEYS_ENVELOPE_CHARS {
             return Err(invalid_stored_api_keys());
@@ -53,16 +73,39 @@ impl<'a> ApiKeyRepository<'a> {
     }
 
     pub async fn store(&self, keys: &[ClientApiKey]) -> AppResult<Vec<ClientApiKey>> {
+        let auth_proxy = self.auth_proxy_settings().await?;
+        Ok(self.store_state(keys, auth_proxy).await?.keys)
+    }
+
+    async fn store_state(
+        &self,
+        keys: &[ClientApiKey],
+        auth_proxy: AuthProxySettings,
+    ) -> AppResult<ApiKeyState> {
         let validated = validate_api_key_collection(keys.iter().cloned(), invalid_stored_api_keys)?;
+        let auth_proxy = validate_stored_settings(auth_proxy)?;
         let value = serde_json::to_value(StoredApiKeys {
             version: 1,
             keys: validated.clone(),
+            auth_proxy: auth_proxy.clone(),
         })
         .map_err(|_| invalid_stored_api_keys())?;
         let encrypted = seal_json(&value, self.master_key, API_KEYS_ENVELOPE_PURPOSE)
             .map_err(|_| invalid_stored_api_keys())?;
         self.store.put(API_KEYS_KV_KEY, &encrypted).await?;
-        Ok(validated)
+        Ok(ApiKeyState {
+            keys: validated,
+            auth_proxy,
+        })
+    }
+
+    pub async fn update_auth_proxy(&self, value: &Value) -> AppResult<AuthProxySettings> {
+        let auth_proxy = validate_settings_input(value)?;
+        let current = self.read_state(None).await?;
+        Ok(self
+            .store_state(&current.keys, auth_proxy)
+            .await?
+            .auth_proxy)
     }
 
     pub async fn authenticate(&self, token: Option<&str>) -> AppResult<()> {
@@ -187,13 +230,16 @@ pub fn validate_api_key_input(value: &Value) -> AppResult<ClientApiKey> {
     })
 }
 
-fn validate_stored_api_keys(value: Value) -> AppResult<Vec<ClientApiKey>> {
+fn validate_stored_api_keys(value: Value) -> AppResult<ApiKeyState> {
     let stored: StoredApiKeys =
         serde_json::from_value(value).map_err(|_| invalid_stored_api_keys())?;
     if stored.version != 1 {
         return Err(invalid_stored_api_keys());
     }
-    validate_api_key_collection(stored.keys, invalid_stored_api_keys)
+    Ok(ApiKeyState {
+        keys: validate_api_key_collection(stored.keys, invalid_stored_api_keys)?,
+        auth_proxy: validate_stored_settings(stored.auth_proxy)?,
+    })
 }
 
 fn validate_api_key_collection(
@@ -296,9 +342,54 @@ fn invalid_stored_api_keys() -> ApiError {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        cell::RefCell,
+        collections::BTreeMap,
+        future::Future,
+        pin::pin,
+        task::{Context, Poll, Waker},
+    };
+
+    use async_trait::async_trait;
     use serde_json::json;
 
     use super::*;
+
+    const MASTER_KEY: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+
+    #[derive(Default)]
+    struct MemoryStore {
+        values: RefCell<BTreeMap<String, String>>,
+    }
+
+    #[async_trait(?Send)]
+    impl SecretStore for MemoryStore {
+        async fn get(&self, key: &str, _cache_ttl: Option<u64>) -> AppResult<Option<String>> {
+            Ok(self.values.borrow().get(key).cloned())
+        }
+
+        async fn put(&self, key: &str, value: &str) -> AppResult<()> {
+            self.values
+                .borrow_mut()
+                .insert(key.to_owned(), value.to_owned());
+            Ok(())
+        }
+
+        async fn delete(&self, key: &str) -> AppResult<()> {
+            self.values.borrow_mut().remove(key);
+            Ok(())
+        }
+    }
+
+    fn block_on_ready<F: Future>(future: F) -> F::Output {
+        let mut future = pin!(future);
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("test future unexpectedly returned pending"),
+        }
+    }
 
     fn key(name: &str, key: &str, enabled: bool) -> ClientApiKey {
         ClientApiKey {
@@ -352,6 +443,46 @@ mod tests {
         assert_eq!(
             client_token(Some("Basic value"), None, Some(" google ")).as_deref(),
             Some("google")
+        );
+    }
+
+    #[test]
+    fn encrypted_envelope_preserves_keys_proxy_settings_and_legacy_records() {
+        let store = MemoryStore::default();
+        let repository = ApiKeyRepository::new(&store, MASTER_KEY);
+        let legacy = seal_json(
+            &json!({ "version": 1, "keys": [] }),
+            MASTER_KEY,
+            API_KEYS_ENVELOPE_PURPOSE,
+        )
+        .unwrap();
+        store
+            .values
+            .borrow_mut()
+            .insert(API_KEYS_KV_KEY.into(), legacy);
+        assert_eq!(
+            block_on_ready(repository.auth_proxy_settings()).unwrap(),
+            AuthProxySettings::default()
+        );
+
+        let configured_key = key("client", "sk-ccccccccccccccccccc2", true);
+        block_on_ready(repository.store(std::slice::from_ref(&configured_key))).unwrap();
+        let settings = block_on_ready(repository.update_auth_proxy(&json!({
+            "enabled": true,
+            "allowedAccountIds": ["account-sensitive"]
+        })))
+        .unwrap();
+
+        let raw = store.values.borrow().get(API_KEYS_KV_KEY).cloned().unwrap();
+        assert!(!raw.contains("account-sensitive"));
+        assert!(!raw.contains("sk-ccccccccccccccccccc2"));
+        assert_eq!(
+            block_on_ready(repository.read()).unwrap(),
+            vec![configured_key]
+        );
+        assert_eq!(
+            block_on_ready(repository.auth_proxy_settings()).unwrap(),
+            settings
         );
     }
 }

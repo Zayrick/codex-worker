@@ -135,6 +135,7 @@ pub enum AdminRoute {
     ApiKeysCreate,
     ApiKeysUpdate,
     ApiKeysDelete,
+    AuthProxyUpdate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +173,7 @@ pub fn match_admin_route(
         ("POST", "api-keys") => AdminRoute::ApiKeysCreate,
         ("PUT", "api-keys") => AdminRoute::ApiKeysUpdate,
         ("DELETE", "api-keys") => AdminRoute::ApiKeysDelete,
+        ("PUT", "auth-proxy") => AdminRoute::AuthProxyUpdate,
         _ => return None,
     };
     Some(MatchedAdminRoute { base_path, route })
@@ -233,5 +235,12 @@ mod tests {
             })
         );
         assert_eq!(match_admin_route("GET", "/secret/admin", "bad/path"), None);
+        assert_eq!(
+            match_admin_route("PUT", "/secret/admin/auth-proxy", "secret"),
+            Some(MatchedAdminRoute {
+                base_path: "/secret/admin".into(),
+                route: AdminRoute::AuthProxyUpdate,
+            })
+        );
     }
 }
