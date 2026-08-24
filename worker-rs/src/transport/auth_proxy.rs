@@ -3,7 +3,7 @@ use worker::wasm_bindgen::JsValue;
 use worker::{AbortSignal, Env, Fetch, Headers, Request, Response};
 
 use crate::{
-    auth::{ApiKeyRepository, OAuthRepository},
+    auth::{ApiKeyRepository, OAuthRepository, replacement_allowed},
     core::{ApiError, AppResult},
     upstream::{
         auth_proxy::{auth_proxy_request_headers, resolve_auth_proxy_url},
@@ -34,14 +34,14 @@ async fn dispatch_auth_proxy(
     let encryption_key = WorkerConfig::encryption_key(env)?;
     let relay_origin = WorkerConfig::relay_origin(env)?;
     let store = CloudflareSecretStore::from_env(env)?;
-    let settings = ApiKeyRepository::new(&store, &encryption_key)
-        .auth_proxy_settings()
+    let configured_accounts = ApiKeyRepository::new(&store, &encryption_key)
+        .read_auth_proxy_accounts()
         .await?;
     let incoming_account_id = request
         .headers()
         .get(crate::upstream::auth_proxy::ACCOUNT_ID_HEADER)
         .map_err(|_| invalid_proxy_request())?;
-    let replacement = if settings.allows(incoming_account_id.as_deref()) {
+    let replacement = if replacement_allowed(incoming_account_id.as_deref(), &configured_accounts) {
         let stored = OAuthRepository::new(&store, &encryption_key)
             .codex_credentials(now_ms)
             .await?;

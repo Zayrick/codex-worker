@@ -7,8 +7,12 @@ use subtle::ConstantTimeEq;
 use crate::core::{ApiError, AppResult};
 
 use super::{
-    AuthProxySettings, SecretStore,
-    auth_proxy::{validate_settings_input, validate_stored_settings},
+    AuthProxyAccount, SecretStore,
+    auth_proxy::{
+        MAX_AUTH_PROXY_ACCOUNTS, auth_proxy_account_conflict, auth_proxy_account_not_found,
+        validate_auth_proxy_account_input, validate_auth_proxy_account_name,
+        validate_stored_auth_proxy_accounts,
+    },
     open_json, seal_json, sha256,
 };
 
@@ -32,14 +36,14 @@ pub struct ClientApiKey {
 struct StoredApiKeys {
     version: u8,
     keys: Vec<ClientApiKey>,
-    #[serde(default, rename = "authProxy")]
-    auth_proxy: AuthProxySettings,
+    #[serde(default, rename = "authProxyAccounts")]
+    auth_proxy_accounts: Vec<AuthProxyAccount>,
 }
 
 #[derive(Debug, Default)]
 struct ApiKeyState {
     keys: Vec<ClientApiKey>,
-    auth_proxy: AuthProxySettings,
+    auth_proxy_accounts: Vec<AuthProxyAccount>,
 }
 
 pub struct ApiKeyRepository<'a> {
@@ -56,8 +60,8 @@ impl<'a> ApiKeyRepository<'a> {
         Ok(self.read_state(Some(30)).await?.keys)
     }
 
-    pub async fn auth_proxy_settings(&self) -> AppResult<AuthProxySettings> {
-        Ok(self.read_state(None).await?.auth_proxy)
+    pub async fn read_auth_proxy_accounts(&self) -> AppResult<Vec<AuthProxyAccount>> {
+        Ok(self.read_state(None).await?.auth_proxy_accounts)
     }
 
     async fn read_state(&self, cache_ttl: Option<u64>) -> AppResult<ApiKeyState> {
@@ -73,21 +77,21 @@ impl<'a> ApiKeyRepository<'a> {
     }
 
     pub async fn store(&self, keys: &[ClientApiKey]) -> AppResult<Vec<ClientApiKey>> {
-        let auth_proxy = self.auth_proxy_settings().await?;
-        Ok(self.store_state(keys, auth_proxy).await?.keys)
+        let auth_proxy_accounts = self.read_auth_proxy_accounts().await?;
+        Ok(self.store_state(keys, auth_proxy_accounts).await?.keys)
     }
 
     async fn store_state(
         &self,
         keys: &[ClientApiKey],
-        auth_proxy: AuthProxySettings,
+        auth_proxy_accounts: Vec<AuthProxyAccount>,
     ) -> AppResult<ApiKeyState> {
         let validated = validate_api_key_collection(keys.iter().cloned(), invalid_stored_api_keys)?;
-        let auth_proxy = validate_stored_settings(auth_proxy)?;
+        let auth_proxy_accounts = validate_stored_auth_proxy_accounts(auth_proxy_accounts)?;
         let value = serde_json::to_value(StoredApiKeys {
             version: 1,
             keys: validated.clone(),
-            auth_proxy: auth_proxy.clone(),
+            auth_proxy_accounts: auth_proxy_accounts.clone(),
         })
         .map_err(|_| invalid_stored_api_keys())?;
         let encrypted = seal_json(&value, self.master_key, API_KEYS_ENVELOPE_PURPOSE)
@@ -95,17 +99,8 @@ impl<'a> ApiKeyRepository<'a> {
         self.store.put(API_KEYS_KV_KEY, &encrypted).await?;
         Ok(ApiKeyState {
             keys: validated,
-            auth_proxy,
+            auth_proxy_accounts,
         })
-    }
-
-    pub async fn update_auth_proxy(&self, value: &Value) -> AppResult<AuthProxySettings> {
-        let auth_proxy = validate_settings_input(value)?;
-        let current = self.read_state(None).await?;
-        Ok(self
-            .store_state(&current.keys, auth_proxy)
-            .await?
-            .auth_proxy)
     }
 
     pub async fn authenticate(&self, token: Option<&str>) -> AppResult<()> {
@@ -157,6 +152,69 @@ impl<'a> ApiKeyRepository<'a> {
             return Err(api_key_not_found());
         }
         self.store(&updated).await
+    }
+
+    pub async fn create_auth_proxy_account(
+        &self,
+        value: &Value,
+    ) -> AppResult<Vec<AuthProxyAccount>> {
+        let candidate = validate_auth_proxy_account_input(value)?;
+        let current = self.read_state(None).await?;
+        require_available_auth_proxy_account(&current.auth_proxy_accounts, &candidate)?;
+        let mut updated = current.auth_proxy_accounts;
+        updated.push(candidate);
+        Ok(self
+            .store_state(&current.keys, updated)
+            .await?
+            .auth_proxy_accounts)
+    }
+
+    pub async fn update_auth_proxy_account(
+        &self,
+        original_name: &Value,
+        value: &Value,
+    ) -> AppResult<Vec<AuthProxyAccount>> {
+        let target_name = validate_auth_proxy_account_name(original_name.as_str())?;
+        let candidate = validate_auth_proxy_account_input(value)?;
+        let current = self.read_state(None).await?;
+        let mut accounts = current.auth_proxy_accounts;
+        let index = accounts
+            .iter()
+            .position(|entry| entry.name == target_name)
+            .ok_or_else(auth_proxy_account_not_found)?;
+        let others: Vec<_> = accounts
+            .iter()
+            .enumerate()
+            .filter(|(entry_index, _)| *entry_index != index)
+            .map(|(_, entry)| entry.clone())
+            .collect();
+        require_available_auth_proxy_account(&others, &candidate)?;
+        accounts[index] = candidate;
+        Ok(self
+            .store_state(&current.keys, accounts)
+            .await?
+            .auth_proxy_accounts)
+    }
+
+    pub async fn delete_auth_proxy_account(
+        &self,
+        name: &Value,
+    ) -> AppResult<Vec<AuthProxyAccount>> {
+        let target_name = validate_auth_proxy_account_name(name.as_str())?;
+        let current = self.read_state(None).await?;
+        let accounts: Vec<_> = current
+            .auth_proxy_accounts
+            .iter()
+            .filter(|entry| entry.name != target_name)
+            .cloned()
+            .collect();
+        if accounts.len() == current.auth_proxy_accounts.len() {
+            return Err(auth_proxy_account_not_found());
+        }
+        Ok(self
+            .store_state(&current.keys, accounts)
+            .await?
+            .auth_proxy_accounts)
     }
 }
 
@@ -238,7 +296,7 @@ fn validate_stored_api_keys(value: Value) -> AppResult<ApiKeyState> {
     }
     Ok(ApiKeyState {
         keys: validate_api_key_collection(stored.keys, invalid_stored_api_keys)?,
-        auth_proxy: validate_stored_settings(stored.auth_proxy)?,
+        auth_proxy_accounts: validate_stored_auth_proxy_accounts(stored.auth_proxy_accounts)?,
     })
 }
 
@@ -291,6 +349,31 @@ fn require_available_api_key(current: &[ClientApiKey], candidate: &ClientApiKey)
     }
     if current.len() >= MAX_API_KEYS {
         return Err(api_key_conflict("The API key limit has been reached."));
+    }
+    Ok(())
+}
+
+fn require_available_auth_proxy_account(
+    current: &[AuthProxyAccount],
+    candidate: &AuthProxyAccount,
+) -> AppResult<()> {
+    if current.iter().any(|entry| entry.name == candidate.name) {
+        return Err(auth_proxy_account_conflict(
+            "A credential proxy account with that name already exists.",
+        ));
+    }
+    if current
+        .iter()
+        .any(|entry| entry.account_id == candidate.account_id)
+    {
+        return Err(auth_proxy_account_conflict(
+            "That credential proxy account ID is already configured.",
+        ));
+    }
+    if current.len() >= MAX_AUTH_PROXY_ACCOUNTS {
+        return Err(auth_proxy_account_conflict(
+            "The credential proxy account limit has been reached.",
+        ));
     }
     Ok(())
 }
@@ -447,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_envelope_preserves_keys_proxy_settings_and_legacy_records() {
+    fn encrypted_envelope_preserves_keys_proxy_accounts_and_legacy_records() {
         let store = MemoryStore::default();
         let repository = ApiKeyRepository::new(&store, MASTER_KEY);
         let legacy = seal_json(
@@ -460,16 +543,18 @@ mod tests {
             .values
             .borrow_mut()
             .insert(API_KEYS_KV_KEY.into(), legacy);
-        assert_eq!(
-            block_on_ready(repository.auth_proxy_settings()).unwrap(),
-            AuthProxySettings::default()
+        assert!(
+            block_on_ready(repository.read_auth_proxy_accounts())
+                .unwrap()
+                .is_empty()
         );
 
         let configured_key = key("client", "sk-ccccccccccccccccccc2", true);
         block_on_ready(repository.store(std::slice::from_ref(&configured_key))).unwrap();
-        let settings = block_on_ready(repository.update_auth_proxy(&json!({
-            "enabled": true,
-            "allowedAccountIds": ["account-sensitive"]
+        let accounts = block_on_ready(repository.create_auth_proxy_account(&json!({
+            "name": "browser",
+            "accountId": "account-sensitive",
+            "enabled": true
         })))
         .unwrap();
 
@@ -481,8 +566,8 @@ mod tests {
             vec![configured_key]
         );
         assert_eq!(
-            block_on_ready(repository.auth_proxy_settings()).unwrap(),
-            settings
+            block_on_ready(repository.read_auth_proxy_accounts()).unwrap(),
+            accounts
         );
     }
 }

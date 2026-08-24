@@ -70,9 +70,9 @@ Host 与 `AUTH_PROXY_HOST` 匹配的 `/backend-api` 路径族使用 `CHATGPT_REL
 保留请求方法、路径、Query、流式正文和端到端 header，并直接返回上游 HTTP、SSE 或 WebSocket
 响应。该路由独立于公开 API Key 鉴权和协议转换。
 
-管理端维护全局开关和许可 `account_id`。开关启用且请求中的 `ChatGPT-Account-ID` 精确匹配许可
-列表时，请求中已有的 `Authorization` 和 `ChatGPT-Account-ID` 使用当前 Codex OAuth 凭据替换；
-其他请求按原认证信息转发。
+管理端维护包含名称、`account_id` 和启用状态的代理账户。请求中的 `ChatGPT-Account-ID` 精确匹配
+一条已启用记录时，请求中已有的 `Authorization` 和 `ChatGPT-Account-ID` 使用当前 Codex OAuth
+凭据替换；记录已停用、未匹配或未配置时按原认证信息转发。
 
 当 `/v1/models` 包含 `client_version` 查询参数时，Worker 保留 Codex CLI 模型目录格式，而
 不转换为 OpenAI model list。
@@ -211,7 +211,9 @@ React 管理端使用：
 | `POST /api-keys` | 创建 API Key |
 | `PUT /api-keys` | 更新名称、值或启用状态 |
 | `DELETE /api-keys` | 删除 API Key |
-| `PUT /auth-proxy` | 更新凭据替换启用状态和许可 `account_id` 列表 |
+| `POST /auth-proxy` | 创建代理账户 |
+| `PUT /auth-proxy` | 更新代理账户的名称、`account_id` 或启用状态 |
+| `DELETE /auth-proxy` | 删除代理账户 |
 
 `/state`、`/subscription`、OAuth、API Key 和 Backend API 代理端点需要有效的管理会话；登录、退出
 以及所有受保护的管理写请求必须通过同源 `Origin` 校验。管理会话和凭据约束见

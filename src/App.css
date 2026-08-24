@@ -881,69 +881,24 @@
 	margin-top: 0.75rem;
 }
 
-.proxy-enable-switch {
-	display: flex;
-	align-items: center;
-	gap: 0.65rem;
-	color: var(--text-secondary);
-	font-size: 0.76rem;
-	font-weight: 650;
-}
-
-.proxy-host {
-	display: flex;
-	min-width: 0;
-	align-items: center;
-	gap: 0.6rem;
-	margin: 0 0 0.9rem;
-	color: var(--text-tertiary);
-	font-size: 0.72rem;
-}
-
-.proxy-host code {
-	min-width: 0;
-	overflow: hidden;
-	color: var(--text-secondary);
-	font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.proxy-add-form {
-	display: grid;
-	gap: 0.42rem;
-	margin-bottom: 0.9rem;
-}
-
-.proxy-add-row {
-	display: flex;
-	align-items: stretch;
-	gap: 0.5rem;
-}
-
-.proxy-add-row input {
-	min-width: 0;
-	flex: 1;
-	padding-right: 0.85rem;
-	font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-	font-size: 0.78rem;
-}
-
-.field-error {
-	color: var(--danger);
-	font-size: 0.72rem;
-}
-
-.proxy-empty-state {
-	min-height: 6.5rem;
-}
-
-.proxy-table {
+.proxy-table,
+.keys-card table {
 	table-layout: fixed;
 }
 
-.proxy-table th:first-child {
-	width: 84%;
+.proxy-table th:nth-child(1),
+.keys-card th:nth-child(1) {
+	width: 22%;
+}
+
+.proxy-table th:nth-child(2),
+.keys-card th:nth-child(2) {
+	width: 48%;
+}
+
+.proxy-table th:nth-child(3),
+.keys-card th:nth-child(3) {
+	width: 14%;
 }
 
 .proxy-account-id {
@@ -979,22 +934,6 @@ table {
 	border-collapse: collapse;
 }
 
-.keys-card table {
-	table-layout: fixed;
-}
-
-.keys-card th:nth-child(1) {
-	width: 22%;
-}
-
-.keys-card th:nth-child(2) {
-	width: 48%;
-}
-
-.keys-card th:nth-child(3) {
-	width: 14%;
-}
-
 th,
 td {
 	padding: 0.78rem 0.85rem;
@@ -1027,6 +966,7 @@ td strong {
 	font-weight: 680;
 }
 
+.auth-proxy-card td:first-child strong,
 .keys-card td:first-child strong {
 	display: block;
 	min-width: 0;
@@ -1189,6 +1129,10 @@ td strong {
 
 .editor-tools > .button {
 	flex: 0 0 auto;
+}
+
+.editor-tools-end {
+	justify-content: flex-end;
 }
 
 .switch-row {
@@ -1483,14 +1427,6 @@ td strong {
 }
 
 @media (max-width: 28rem) {
-	.proxy-add-row {
-		flex-direction: column;
-	}
-
-	.proxy-add-row .button {
-		width: 100%;
-	}
-
 	.auth-card {
 		padding: 1.35rem;
 	}

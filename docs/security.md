@@ -41,7 +41,7 @@ CI 输出。
 | KV key | 明文内容 | 存储形式 |
 | --- | --- | --- |
 | `oauth` | access token、refresh token、账户 ID、邮箱和过期时间 | AES-256-GCM envelope |
-| `API_KEYS` | API Key 名称、值和启用状态，以及凭据替换启用状态和许可 `account_id` 列表 | AES-256-GCM envelope |
+| `API_KEYS` | API Key 名称、值和启用状态，以及代理账户的名称、`account_id` 和启用状态 | AES-256-GCM envelope |
 | `CODEX_USAGE` | 订阅类型、用量百分比、额度重置时间和告警状态 | AES-256-GCM envelope |
 
 每次写入生成新的 12 字节 IV。OAuth、API Key 与代理设置、Codex 用量、设备授权 state 和管理
@@ -115,8 +115,9 @@ key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受
 ### Backend API 凭据代理
 
 `AUTH_PROXY_HOST` 上的 `/backend-api` 请求将端到端 header 和正文发送到
-`CHATGPT_RELAY_URL`。许可 `account_id` 使用已保存的 Codex OAuth 凭据；其他请求保留原
-Authorization、账户 ID 和 Cookie。该 Host 与 relay 都必须处于部署者控制的信任边界内。
+`CHATGPT_RELAY_URL`。匹配已启用代理账户的 `account_id` 使用已保存的 Codex OAuth 凭据；已停用、
+未匹配或未配置的请求保留原 Authorization、账户 ID 和 Cookie。该 Host 与 relay 都必须处于
+部署者控制的信任边界内。
 
 ## 7. KV 一致性与撤销语义
 

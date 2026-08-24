@@ -10,7 +10,7 @@ import {
 	AdminApiClient,
 	AdminApiError,
 	AdminSessionExpiredError,
-	type AuthProxySettings,
+	type AuthProxyAccount,
 	type ClientApiKey,
 	type DeviceAuthorization,
 	type OAuthStatus,
@@ -30,6 +30,7 @@ const API_KEY_INPUT_PATTERN = String.raw`(?=.*[A-Za-z])(?=.*[0-9])(?=.*[^A-Za-z0
 type Screen = "loading" | "login" | "dashboard" | "invalid-path";
 type Notice = { tone: "success" | "error"; text: string };
 type EditableKey = ClientApiKey | "new" | null;
+type EditableAuthProxyAccount = AuthProxyAccount | "new" | null;
 
 function App() {
 	const basePath = useMemo(() => managementBasePath(window.location.pathname), []);
@@ -50,12 +51,18 @@ function App() {
 	const [subscriptionLoading, setSubscriptionLoading] = useState(false);
 	const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
 	const [apiKeys, setApiKeys] = useState<ClientApiKey[]>([]);
-	const [authProxy, setAuthProxy] = useState<AuthProxySettings>({
-		host: null,
-		enabled: false,
-		allowedAccountIds: [],
-	});
+	const [authProxyAccounts, setAuthProxyAccounts] = useState<AuthProxyAccount[]>([]);
+	const [authProxyRefreshing, setAuthProxyRefreshing] = useState(false);
+	const [authProxyToggling, setAuthProxyToggling] = useState<ReadonlySet<string>>(
+		() => new Set(),
+	);
+	const [authProxyEditor, setAuthProxyEditor] =
+		useState<EditableAuthProxyAccount>(null);
 	const [authProxySaving, setAuthProxySaving] = useState(false);
+	const [pendingAuthProxyDelete, setPendingAuthProxyDelete] = useState<string | null>(
+		null,
+	);
+	const [authProxyDeleting, setAuthProxyDeleting] = useState(false);
 	const [keysRefreshing, setKeysRefreshing] = useState(false);
 	const [keysToggling, setKeysToggling] = useState<ReadonlySet<string>>(
 		() => new Set(),
@@ -75,6 +82,7 @@ function App() {
 	const initializedRef = useRef(false);
 	const deviceRequestInFlightRef = useRef(false);
 	const keyTogglingRef = useRef<Set<string>>(new Set());
+	const authProxyTogglingRef = useRef<Set<string>>(new Set());
 	const pollTimerRef = useRef<number | null>(null);
 	const initializeRef = useRef(initialize);
 	initializeRef.current = initialize;
@@ -115,7 +123,7 @@ function App() {
 			setOAuth(state.oauth);
 			setSubscription(state.subscription);
 			setApiKeys(state.apiKeys);
-			setAuthProxy(state.authProxy);
+			setAuthProxyAccounts(state.authProxyAccounts);
 			setScreen("dashboard");
 			setLoginError(null);
 			if (state.oauth) {
@@ -366,28 +374,100 @@ function App() {
 		}
 	}
 
-	async function saveAuthProxy(
-		next: AuthProxySettings,
-		successText: string,
-	): Promise<boolean> {
-		if (!api || authProxySaving) return false;
-		setAuthProxySaving(true);
+	async function refreshAuthProxyAccounts(): Promise<void> {
+		if (!api || authProxyRefreshing) return;
+		setAuthProxyRefreshing(true);
 		try {
-			const saved = await api.updateAuthProxy({
-				enabled: next.enabled,
-				allowedAccountIds: next.allowedAccountIds,
-			});
-			if (!mountedRef.current) return false;
-			setAuthProxy(saved);
-			showNotice(successText, "success");
-			return true;
+			const state = await api.getState();
+			if (!mountedRef.current) return;
+			setAuthProxyAccounts(state.authProxyAccounts);
 		} catch (error) {
 			if (!handleSessionFailure(error)) {
-				showNotice(errorMessage(error, "保存凭据替换配置失败。"), "error");
+				showNotice(errorMessage(error, "刷新代理账户失败。"), "error");
 			}
-			return false;
+		} finally {
+			if (mountedRef.current) setAuthProxyRefreshing(false);
+		}
+	}
+
+	async function saveAuthProxyAccount(value: AuthProxyAccount): Promise<void> {
+		if (!api || !authProxyEditor || authProxySaving) return;
+		setAuthProxySaving(true);
+		try {
+			const next =
+				authProxyEditor === "new"
+					? await api.createAuthProxyAccount(value)
+					: await api.updateAuthProxyAccount(authProxyEditor.name, value);
+			if (!mountedRef.current) return;
+			setAuthProxyAccounts(next);
+			setAuthProxyEditor(null);
+			showNotice("代理账户已保存。", "success");
+		} catch (error) {
+			if (!handleSessionFailure(error)) {
+				showNotice(errorMessage(error, "保存代理账户失败。"), "error");
+			}
 		} finally {
 			if (mountedRef.current) setAuthProxySaving(false);
+		}
+	}
+
+	async function toggleAuthProxyAccount(entry: AuthProxyAccount): Promise<void> {
+		if (
+			!api ||
+			authProxyRefreshing ||
+			authProxyTogglingRef.current.size > 0
+		) {
+			return;
+		}
+
+		const enabled = !entry.enabled;
+		const pending = new Set(authProxyTogglingRef.current);
+		pending.add(entry.name);
+		authProxyTogglingRef.current = pending;
+		setAuthProxyToggling(pending);
+		setAuthProxyAccounts((current) =>
+			current.map((candidate) =>
+				candidate.name === entry.name ? { ...candidate, enabled } : candidate,
+			),
+		);
+		try {
+			const next = await api.updateAuthProxyAccount(entry.name, {
+				...entry,
+				enabled,
+			});
+			if (mountedRef.current) setAuthProxyAccounts(next);
+		} catch (error) {
+			if (!handleSessionFailure(error) && mountedRef.current) {
+				setAuthProxyAccounts((current) =>
+					current.map((candidate) =>
+						candidate.name === entry.name ? entry : candidate,
+					),
+				);
+				showNotice(errorMessage(error, "切换代理账户状态失败。"), "error");
+			}
+		} finally {
+			const remaining = new Set(authProxyTogglingRef.current);
+			remaining.delete(entry.name);
+			authProxyTogglingRef.current = remaining;
+			if (mountedRef.current) setAuthProxyToggling(remaining);
+		}
+	}
+
+	async function deleteAuthProxyAccount(): Promise<void> {
+		if (!api || !pendingAuthProxyDelete || authProxyDeleting) return;
+		setAuthProxyDeleting(true);
+		try {
+			const next = await api.deleteAuthProxyAccount(pendingAuthProxyDelete);
+			if (!mountedRef.current) return;
+			setAuthProxyAccounts(next);
+			setPendingAuthProxyDelete(null);
+			showNotice("代理账户已删除。", "success");
+		} catch (error) {
+			if (!handleSessionFailure(error)) {
+				showNotice(errorMessage(error, "删除代理账户失败。"), "error");
+			}
+		} finally {
+			if (mountedRef.current) setAuthProxyDeleting(false);
 		}
 	}
 
@@ -413,13 +493,17 @@ function App() {
 		setOAuth(null);
 		setSubscription(null);
 		setApiKeys([]);
-		setAuthProxy({ host: null, enabled: false, allowedAccountIds: [] });
+		setAuthProxyAccounts([]);
 		keyTogglingRef.current = new Set();
 		setKeysToggling(new Set());
+		authProxyTogglingRef.current = new Set();
+		setAuthProxyToggling(new Set());
 		setDeviceAuthorization(null);
 		setDeviceError(null);
 		setKeyEditor(null);
 		setPendingDelete(null);
+		setAuthProxyEditor(null);
+		setPendingAuthProxyDelete(null);
 	}
 
 	function clearPollTimer(): void {
@@ -469,9 +553,14 @@ function App() {
 				/>
 
 				<AuthProxyCard
-					loading={authProxySaving}
-					onSave={saveAuthProxy}
-					settings={authProxy}
+					accounts={authProxyAccounts}
+					loading={authProxyRefreshing}
+					onAdd={() => setAuthProxyEditor("new")}
+					onDelete={setPendingAuthProxyDelete}
+					onEdit={setAuthProxyEditor}
+					onRefresh={() => void refreshAuthProxyAccounts()}
+					onToggle={(entry) => void toggleAuthProxyAccount(entry)}
+					togglingAccounts={authProxyToggling}
 				/>
 
 				<ApiKeysCard
@@ -498,12 +587,28 @@ function App() {
 					onSave={(value) => void saveApiKey(value)}
 				/>
 			) : null}
+			{authProxyEditor ? (
+				<AuthProxyEditorDialog
+					entry={authProxyEditor}
+					loading={authProxySaving}
+					onCancel={() => setAuthProxyEditor(null)}
+					onSave={(value) => void saveAuthProxyAccount(value)}
+				/>
+			) : null}
 			{pendingDelete ? (
 				<ConfirmDialog
 					loading={keyDeleting}
 					onCancel={() => setPendingDelete(null)}
 					onConfirm={() => void deleteApiKey()}
 					title={`删除“${pendingDelete}”？`}
+				/>
+			) : null}
+			{pendingAuthProxyDelete ? (
+				<ConfirmDialog
+					loading={authProxyDeleting}
+					onCancel={() => setPendingAuthProxyDelete(null)}
+					onConfirm={() => void deleteAuthProxyAccount()}
+					title={`删除“${pendingAuthProxyDelete}”？`}
 				/>
 			) : null}
 		</div>
@@ -957,141 +1062,128 @@ function QuotaRingLegend({
 }
 
 interface AuthProxyCardProps {
-	settings: AuthProxySettings;
+	accounts: AuthProxyAccount[];
 	loading: boolean;
-	onSave: (settings: AuthProxySettings, successText: string) => Promise<boolean>;
+	onAdd: () => void;
+	onDelete: (name: string) => void;
+	onEdit: (entry: AuthProxyAccount) => void;
+	onRefresh: () => void;
+	onToggle: (entry: AuthProxyAccount) => void;
+	togglingAccounts: ReadonlySet<string>;
 }
 
-function AuthProxyCard({ settings, loading, onSave }: AuthProxyCardProps) {
-	const [accountId, setAccountId] = useState("");
-	const [inputError, setInputError] = useState<string | null>(null);
-
-	async function addAccountId(event: FormEvent<HTMLFormElement>): Promise<void> {
-		event.preventDefault();
-		if (loading) return;
-		const normalized = accountId.trim();
-		if (!validAccountId(normalized)) {
-			setInputError("account_id 必须是 1–256 位可见 ASCII 字符。");
-			return;
-		}
-		if (settings.allowedAccountIds.includes(normalized)) {
-			setInputError("该 account_id 已在许可列表中。");
-			return;
-		}
-		if (settings.allowedAccountIds.length >= 100) {
-			setInputError("许可列表最多保存 100 个 account_id。");
-			return;
-		}
-
-		const saved = await onSave(
-			{
-				...settings,
-				allowedAccountIds: [...settings.allowedAccountIds, normalized],
-			},
-			"account_id 已加入许可列表。",
-		);
-		if (saved) {
-			setAccountId("");
-			setInputError(null);
-		}
-	}
-
+function AuthProxyCard({
+	accounts,
+	loading,
+	onAdd,
+	onDelete,
+	onEdit,
+	onRefresh,
+	onToggle,
+	togglingAccounts,
+}: AuthProxyCardProps) {
+	const busy = loading || togglingAccounts.size > 0;
 	return (
 		<section className="card auth-proxy-card" aria-labelledby="auth-proxy-title">
 			<CardHeader
 				id="auth-proxy-title"
 				action={
-					<label className="proxy-enable-switch">
-						<span>{settings.enabled ? "已启用" : "已关闭"}</span>
-						<input
-							aria-label={settings.enabled ? "关闭凭据替换" : "启用凭据替换"}
-							checked={settings.enabled}
-							className="switch-control"
-							disabled={loading}
-							onChange={() => {
-								const enabled = !settings.enabled;
-								void onSave(
-									{ ...settings, enabled },
-									`凭据替换已${enabled ? "启用" : "关闭"}。`,
-								);
-							}}
-							type="checkbox"
-						/>
-					</label>
+					<div className="card-actions">
+						<button
+							aria-label="刷新代理账户"
+							className="icon-button"
+							disabled={busy}
+							onClick={onRefresh}
+							title="刷新代理账户"
+							type="button"
+						>
+							<Icon name="refresh" spinning={loading} />
+						</button>
+						<button
+							className="button button-primary"
+							disabled={busy}
+							onClick={onAdd}
+							type="button"
+						>
+							<Icon name="plus" />
+							添加
+						</button>
+					</div>
 				}
-				title={`凭据替换${settings.allowedAccountIds.length > 0 ? ` · ${settings.allowedAccountIds.length}` : ""}`}
+				title={`代理账户${accounts.length > 0 ? ` · ${accounts.length}` : ""}`}
 			/>
 
-			<p className="proxy-host">
-				<span>Host</span>
-				<code>{settings.host ?? "—"}</code>
-			</p>
-
-			<form className="auth-form proxy-add-form" onSubmit={(event) => void addAccountId(event)}>
-				<label htmlFor="proxy-account-id">许可 account_id</label>
-				<div className="proxy-add-row">
-					<input
-						id="proxy-account-id"
-						autoComplete="off"
-						disabled={loading}
-						maxLength={MAX_ACCOUNT_ID_LENGTH}
-						onChange={(event) => {
-							setAccountId(event.target.value);
-							setInputError(null);
-						}}
-						placeholder="例如：account-..."
-						required
-						spellCheck={false}
-						type="text"
-						value={accountId}
-					/>
-					<button className="button button-primary" disabled={loading} type="submit">
+			{accounts.length === 0 ? (
+				<div className="empty-state">
+					<strong>暂无代理账户</strong>
+					<button
+						className="button button-secondary"
+						disabled={busy}
+						onClick={onAdd}
+						type="button"
+					>
 						<Icon name="plus" />
 						添加
 					</button>
-				</div>
-				{inputError ? <span className="field-error">{inputError}</span> : null}
-			</form>
-
-			{settings.allowedAccountIds.length === 0 ? (
-				<div className="empty-state proxy-empty-state">
-					<strong>暂无许可 account_id</strong>
 				</div>
 			) : (
 				<div className="table-wrap">
 					<table className="proxy-table">
 						<thead>
 							<tr>
+								<th scope="col">名称</th>
 								<th scope="col">account_id</th>
+								<th scope="col">状态</th>
 								<th scope="col" className="actions-column">操作</th>
 							</tr>
 						</thead>
 						<tbody>
-							{settings.allowedAccountIds.map((allowedAccountId) => (
-								<tr key={allowedAccountId}>
+							{accounts.map((entry) => {
+								const toggling = togglingAccounts.has(entry.name);
+								return (
+								<tr key={entry.name}>
+									<td data-label="名称">
+										<strong title={entry.name}>{entry.name}</strong>
+									</td>
 									<td data-label="account_id">
-										<code className="proxy-account-id" title={allowedAccountId}>
-											{allowedAccountId}
+										<code className="proxy-account-id" title={entry.accountId}>
+											{entry.accountId}
 										</code>
+									</td>
+									<td data-label="状态">
+										<label
+											className="key-status-switch"
+											title={toggling ? "正在更新状态…" : entry.enabled ? "停用" : "启用"}
+										>
+											<input
+												aria-busy={toggling || undefined}
+												aria-label={`${entry.enabled ? "停用" : "启用"} ${entry.name}`}
+												checked={entry.enabled}
+												className="switch-control"
+												disabled={busy}
+												onChange={() => onToggle(entry)}
+												type="checkbox"
+											/>
+										</label>
 									</td>
 									<td data-label="操作">
 										<div className="row-actions">
 											<button
-												aria-label={`移除 ${allowedAccountId}`}
+												aria-label={`编辑 ${entry.name}`}
+												className="icon-button"
+												disabled={busy}
+												onClick={() => onEdit(entry)}
+												title="编辑"
+												type="button"
+											>
+												<Icon name="edit" />
+											</button>
+											<button
+												aria-label={`删除 ${entry.name}`}
 												className="icon-button danger-icon-button"
-												disabled={loading}
-												onClick={() => {
-													void onSave(
-														{
-															...settings,
-															allowedAccountIds: settings.allowedAccountIds.filter(
-																(value) => value !== allowedAccountId,
-															),
-														},
-														"account_id 已移出许可列表。",
-													);
-												}}
-												title="移除"
+												disabled={busy}
+												onClick={() => onDelete(entry.name)}
+												title="删除"
 												type="button"
 											>
 												<Icon name="trash" />
@@ -1099,7 +1191,8 @@ function AuthProxyCard({ settings, loading, onSave }: AuthProxyCardProps) {
 										</div>
 									</td>
 								</tr>
-							))}
+								);
+							})}
 						</tbody>
 					</table>
 				</div>
@@ -1279,6 +1372,129 @@ function ApiKeysCard({
 				</div>
 			)}
 		</section>
+	);
+}
+
+interface AuthProxyEditorDialogProps {
+	entry: Exclude<EditableAuthProxyAccount, null>;
+	loading: boolean;
+	onCancel: () => void;
+	onSave: (value: AuthProxyAccount) => void;
+}
+
+function AuthProxyEditorDialog({
+	entry,
+	loading,
+	onCancel,
+	onSave,
+}: AuthProxyEditorDialogProps) {
+	const existing = entry === "new" ? null : entry;
+	const [name, setName] = useState(existing?.name ?? "");
+	const [accountId, setAccountId] = useState(existing?.accountId ?? "");
+	const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+
+	useEffect(() => {
+		function onKeyDown(event: KeyboardEvent): void {
+			if (event.key === "Escape" && !loading) onCancel();
+		}
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [loading, onCancel]);
+
+	function submit(event: FormEvent<HTMLFormElement>): void {
+		event.preventDefault();
+		if (loading || !validAccountId(accountId.trim())) return;
+		onSave({ name, accountId, enabled });
+	}
+
+	return (
+		<div
+			className="modal-backdrop"
+			onMouseDown={(event) => {
+				if (event.target === event.currentTarget && !loading) onCancel();
+			}}
+		>
+			<section
+				aria-labelledby="auth-proxy-editor-title"
+				aria-modal="true"
+				className="modal"
+				role="dialog"
+			>
+				<div className="modal-header">
+					<h2 id="auth-proxy-editor-title">
+						{existing ? "编辑代理账户" : "添加代理账户"}
+					</h2>
+					<button
+						aria-label="关闭"
+						className="icon-button"
+						disabled={loading}
+						onClick={onCancel}
+						type="button"
+					>
+						<Icon name="close" />
+					</button>
+				</div>
+				<form className="editor-form" onSubmit={submit}>
+					<label htmlFor="auth-proxy-name">
+						<span>名称</span>
+						<input
+							id="auth-proxy-name"
+							autoFocus
+							disabled={loading}
+							maxLength={100}
+							onChange={(event) => setName(event.target.value)}
+							placeholder="例如：my-account"
+							required
+							type="text"
+							value={name}
+						/>
+					</label>
+					<label htmlFor="auth-proxy-account-id">
+						<span>account_id</span>
+						<input
+							id="auth-proxy-account-id"
+							autoComplete="off"
+							disabled={loading}
+							maxLength={MAX_ACCOUNT_ID_LENGTH}
+							onChange={(event) => setAccountId(event.target.value)}
+							pattern="[!-~]{1,256}"
+							placeholder="例如：account-..."
+							required
+							spellCheck={false}
+							title="1–256 位可见 ASCII 字符"
+							type="text"
+							value={accountId}
+						/>
+					</label>
+					<div className="editor-tools editor-tools-end">
+						<label className="switch-row">
+							<strong>启用</strong>
+							<input
+								checked={enabled}
+								className="switch-control"
+								disabled={loading}
+								onChange={(event) => setEnabled(event.target.checked)}
+								type="checkbox"
+							/>
+						</label>
+					</div>
+					<div className="modal-actions">
+						<button
+							className="button button-secondary"
+							disabled={loading}
+							onClick={onCancel}
+							type="button"
+						>
+							取消
+						</button>
+						<button className="button button-primary" disabled={loading} type="submit">
+							{loading ? <span className="spinner" aria-hidden="true" /> : null}
+							{loading ? "保存中…" : "保存"}
+						</button>
+					</div>
+				</form>
+			</section>
+		</div>
 	);
 }
 

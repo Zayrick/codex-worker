@@ -31,7 +31,7 @@ Admin browser ──────────→│ Rust/Wasm backend            
 | --- | --- |
 | React 管理端 | 管理会话登录、OAuth 设备授权、订阅额度展示、API Key 与代理账户许可管理 |
 | Rust/Wasm Worker | 路由、鉴权、协议转换、上游访问、流式传输和定时维护 |
-| `AUTH_KV` | 保存加密后的 OAuth 凭据、下游 API Key、Backend API 代理设置和 Codex 用量状态 |
+| `AUTH_KV` | 保存加密后的 OAuth 凭据、下游 API Key、Backend API 代理账户和 Codex 用量状态 |
 | Static Assets | 保存 Vite 构建的管理端资源；HTML 仅由隐藏管理路径读取 |
 | ChatGPT relay | 代表 Worker 访问 `chatgpt.com` 的 Codex 与用量路径 |
 | OpenAI 直连端点 | 承载 OAuth 设备流、token 刷新和 Realtime sideband |
@@ -111,8 +111,8 @@ WebSocket 只处理客户端发往上游的 `response.create` 和 `response.appe
 request → account_id policy → credential selection → trusted relay
 ```
 
-该流程保持路径、Query、端到端 header 和流式正文，并按管理端许可配置选择原请求凭据或已保存的
-Codex OAuth 凭据。
+该流程保持路径、Query、端到端 header 和流式正文，并按已启用的代理账户选择原请求凭据或已保存
+的 Codex OAuth 凭据。
 
 ### 5.3 管理请求
 
@@ -154,7 +154,7 @@ refresh token。
 | KV key | 内容 | 保护方式 |
 | --- | --- | --- |
 | `oauth` | access token、refresh token、账户信息和过期时间 | AES-256-GCM envelope |
-| `API_KEYS` | 下游 API Key 数组、Backend API 代理开关和许可 `account_id` 列表 | AES-256-GCM envelope |
+| `API_KEYS` | 下游 API Key 数组，以及 Backend API 代理账户的名称、`account_id` 和启用状态 | AES-256-GCM envelope |
 | `CODEX_USAGE` | 最近一次用量快照、剩余时间和告警状态 | AES-256-GCM envelope |
 
 设备授权 state 和管理会话不写入 KV，而是使用独立 purpose 加密后交由客户端保存。所有 envelope

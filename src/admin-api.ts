@@ -46,17 +46,17 @@ export interface ClientApiKey {
 	enabled: boolean;
 }
 
-export interface AuthProxySettings {
-	host: string | null;
+export interface AuthProxyAccount {
+	name: string;
+	accountId: string;
 	enabled: boolean;
-	allowedAccountIds: string[];
 }
 
 export interface AdminState {
 	oauth: OAuthStatus | null;
 	subscription: SubscriptionMetadata | null;
 	apiKeys: ClientApiKey[];
-	authProxy: AuthProxySettings;
+	authProxyAccounts: AuthProxyAccount[];
 }
 
 export interface DeviceAuthorization {
@@ -179,13 +179,30 @@ export class AdminApiClient {
 		);
 	}
 
-	updateAuthProxy(
-		settings: Pick<AuthProxySettings, "enabled" | "allowedAccountIds">,
-	): Promise<AuthProxySettings> {
+	createAuthProxyAccount(value: AuthProxyAccount): Promise<AuthProxyAccount[]> {
 		return this.requestJson(
 			"/auth-proxy",
-			jsonRequest("PUT", settings),
-			(value) => parseAuthProxyEnvelope(value).authProxy,
+			jsonRequest("POST", value),
+			(value) => parseAuthProxyAccountsEnvelope(value).authProxyAccounts,
+		);
+	}
+
+	updateAuthProxyAccount(
+		originalName: string,
+		value: AuthProxyAccount,
+	): Promise<AuthProxyAccount[]> {
+		return this.requestJson(
+			"/auth-proxy",
+			jsonRequest("PUT", { originalName, ...value }),
+			(value) => parseAuthProxyAccountsEnvelope(value).authProxyAccounts,
+		);
+	}
+
+	deleteAuthProxyAccount(name: string): Promise<AuthProxyAccount[]> {
+		return this.requestJson(
+			"/auth-proxy",
+			jsonRequest("DELETE", { name }),
+			(value) => parseAuthProxyAccountsEnvelope(value).authProxyAccounts,
 		);
 	}
 
@@ -280,7 +297,7 @@ function parseAdminState(value: unknown): AdminState {
 				? null
 				: parseSubscriptionMetadata(value.subscription),
 		apiKeys: value.apiKeys.map(parseClientApiKey),
-		authProxy: parseAuthProxySettings(value.authProxy),
+		authProxyAccounts: parseAuthProxyAccounts(value.authProxyAccounts),
 	};
 }
 
@@ -361,21 +378,26 @@ function parseApiKeysEnvelope(value: unknown): { apiKeys: ClientApiKey[] } {
 	return { apiKeys: value.apiKeys.map(parseClientApiKey) };
 }
 
-function parseAuthProxyEnvelope(value: unknown): {
-	authProxy: AuthProxySettings;
+function parseAuthProxyAccountsEnvelope(value: unknown): {
+	authProxyAccounts: AuthProxyAccount[];
 } {
 	if (!isRecord(value)) throw invalidPayload();
-	return { authProxy: parseAuthProxySettings(value.authProxy) };
+	return {
+		authProxyAccounts: parseAuthProxyAccounts(value.authProxyAccounts),
+	};
 }
 
-function parseAuthProxySettings(value: unknown): AuthProxySettings {
-	if (!isRecord(value) || !Array.isArray(value.allowedAccountIds)) {
-		throw invalidPayload();
-	}
+function parseAuthProxyAccounts(value: unknown): AuthProxyAccount[] {
+	if (!Array.isArray(value)) throw invalidPayload();
+	return value.map(parseAuthProxyAccount);
+}
+
+function parseAuthProxyAccount(value: unknown): AuthProxyAccount {
+	if (!isRecord(value)) throw invalidPayload();
 	return {
-		host: nullableString(value.host),
+		name: requiredString(value.name),
+		accountId: requiredString(value.accountId),
 		enabled: requiredBoolean(value.enabled),
-		allowedAccountIds: value.allowedAccountIds.map(requiredString),
 	};
 }
 

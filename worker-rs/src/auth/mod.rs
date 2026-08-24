@@ -21,7 +21,7 @@ pub use admin_session::{
 pub use api_keys::{
     ApiKeyRepository, ClientApiKey, authenticate_token, client_token, validate_api_key_input,
 };
-pub use auth_proxy::AuthProxySettings;
+pub use auth_proxy::{AuthProxyAccount, replacement_allowed};
 pub use credentials::{
     CodexCredentials, OAuthRepository, OAuthStatus, StoredOAuthCredentials,
     credentials_from_token_response, oauth_status,
