@@ -60,7 +60,7 @@ pub enum UsageAlertKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageAlert {
     pub kind: UsageAlertKind,
-    pub window_label: String,
+    pub window_kind: CodexQuotaWindowKind,
     pub remaining_percent: Option<f64>,
     pub remaining_time_percent: Option<f64>,
     pub previous_remaining_percent: Option<f64>,
@@ -211,7 +211,7 @@ fn snapshot(window: &CodexQuotaWindow, now_ms: i64) -> MonitoredQuotaWindow {
 fn alert(window: &MonitoredQuotaWindow, kind: UsageAlertKind) -> UsageAlert {
     UsageAlert {
         kind,
-        window_label: window_label(window),
+        window_kind: window.kind,
         remaining_percent: window.remaining_percent,
         remaining_time_percent: window.remaining_time_percent,
         previous_remaining_percent: None,
@@ -221,7 +221,7 @@ fn alert(window: &MonitoredQuotaWindow, kind: UsageAlertKind) -> UsageAlert {
 fn reset_alert(window: &MonitoredQuotaWindow, previous_remaining_percent: f64) -> UsageAlert {
     UsageAlert {
         kind: UsageAlertKind::QuotaReset,
-        window_label: window_label(window),
+        window_kind: window.kind,
         remaining_percent: window.remaining_percent,
         remaining_time_percent: window.remaining_time_percent,
         previous_remaining_percent: Some(previous_remaining_percent),
@@ -314,15 +314,24 @@ fn bounded_chars(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-fn window_label(window: &MonitoredQuotaWindow) -> String {
-    let period = match window.kind {
+fn consumption_period(kind: CodexQuotaWindowKind) -> &'static str {
+    match kind {
+        CodexQuotaWindowKind::FiveHour => "当前 5 小时",
+        CodexQuotaWindowKind::Weekly => "当前周",
+        CodexQuotaWindowKind::Monthly => "当前月",
+        CodexQuotaWindowKind::Primary => "当前主要额度",
+        CodexQuotaWindowKind::Secondary => "当前次要额度",
+    }
+}
+
+fn reset_period(kind: CodexQuotaWindowKind) -> &'static str {
+    match kind {
         CodexQuotaWindowKind::FiveHour => "5 小时",
-        CodexQuotaWindowKind::Weekly => "7 天",
+        CodexQuotaWindowKind::Weekly => "周",
         CodexQuotaWindowKind::Monthly => "月度",
-        CodexQuotaWindowKind::Primary => "主要额度",
-        CodexQuotaWindowKind::Secondary => "次要额度",
-    };
-    format!("{} · {period}", window.name)
+        CodexQuotaWindowKind::Primary => "主要",
+        CodexQuotaWindowKind::Secondary => "次要",
+    }
 }
 
 fn alert_line(alert: &UsageAlert) -> String {
@@ -340,16 +349,16 @@ fn alert_line(alert: &UsageAlert) -> String {
         .unwrap_or_else(|| "未知".into());
     match alert.kind {
         UsageAlertKind::ConsumptionTooFast => format!(
-            "{}：剩余额度 {remaining}，低于剩余时间 {remaining_time}，当前消耗进度偏快。",
-            alert.window_label,
+            "剩余额度 {remaining}，低于剩余时间 {remaining_time}，{}消耗进度偏快。",
+            consumption_period(alert.window_kind),
         ),
         UsageAlertKind::ConsumptionRecovered => format!(
-            "{}：剩余额度 {remaining}，已高于剩余时间 {remaining_time}，消耗已恢复到平均水平。",
-            alert.window_label,
+            "剩余额度 {remaining}，已高于剩余时间 {remaining_time}，{}消耗已恢复到平均水平。",
+            consumption_period(alert.window_kind),
         ),
         UsageAlertKind::QuotaReset => format!(
-            "{}：检测到剩余额度增加，额度已重置，重置前额度剩余 {previous_remaining}。",
-            alert.window_label
+            "检测到{}额度已重置，重置前剩余额度为 {previous_remaining}。",
+            reset_period(alert.window_kind),
         ),
     }
 }
@@ -413,12 +422,9 @@ mod tests {
             NOW_MS + FIVE_MINUTES_MS,
         );
         assert_eq!(crossed.alerts[0].kind, UsageAlertKind::ConsumptionTooFast);
-        assert!(
-            crossed
-                .notification()
-                .unwrap()
-                .body
-                .contains("消耗进度偏快")
+        assert_eq!(
+            crossed.notification().unwrap().body,
+            "剩余额度 6.0%，低于剩余时间 7.0%，当前周消耗进度偏快。"
         );
         let still_below = evaluate_codex_usage(
             Some(&crossed.state),
@@ -447,12 +453,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![UsageAlertKind::ConsumptionRecovered]
         );
-        assert!(
-            recovered
-                .notification()
-                .unwrap()
-                .body
-                .contains("恢复到平均水平")
+        assert_eq!(
+            recovered.notification().unwrap().body,
+            "剩余额度 46.0%，已高于剩余时间 45.0%，当前 5 小时消耗已恢复到平均水平。"
         );
         let next = evaluate_codex_usage(
             Some(&recovered.state),
@@ -477,7 +480,7 @@ mod tests {
         assert_eq!(reset.alerts[0].previous_remaining_percent, Some(40.0));
         assert_eq!(
             reset.notification().unwrap().body,
-            "Codex · 7 天：检测到剩余额度增加，额度已重置，重置前额度剩余 40.0%。"
+            "检测到周额度已重置，重置前剩余额度为 40.0%。"
         );
     }
 
