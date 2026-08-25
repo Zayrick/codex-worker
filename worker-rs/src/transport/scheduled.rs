@@ -86,7 +86,7 @@ async fn monitor_usage(
         codex_subscription_from_usage(&usage.payload, usage.metadata, now_ms as f64)?;
     let repository = CodexUsageStateRepository::new(store, encryption_key);
     let previous = repository.read().await?;
-    let mut evaluation = evaluate_codex_usage(previous.as_ref(), &subscription, now_ms);
+    let evaluation = evaluate_codex_usage(previous.as_ref(), &subscription, now_ms);
 
     if let Some(notification) = evaluation.notification() {
         let delivery = match WorkerConfig::bark_push_url(env) {
@@ -96,9 +96,8 @@ async fn monitor_usage(
             },
             Err(error) => Err(error),
         };
-        match delivery {
-            Ok(()) => evaluation.mark_entry_alerts_delivered(),
-            Err(error) => log_api_failure("scheduled_bark_push", &error),
+        if let Err(error) = delivery {
+            log_api_failure("scheduled_bark_push", &error);
         }
     }
 

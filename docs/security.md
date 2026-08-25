@@ -113,7 +113,7 @@ no-store`。重定向使用手动模式，避免 OAuth 自动重放到未知 ori
 OAuth 设备授权与刷新直连 `auth.openai.com`；Realtime sideband 直连 `api.openai.com`；
 ChatGPT Codex 与订阅用量请求发送到配置的 relay。relay origin 必须通过 HTTPS 精确匹配校验。
 
-Bark 推送只包含额度窗口名称、额度剩余百分比、剩余时间百分比、采样间隔和消耗速度，不包含
+Bark 推送只包含额度窗口名称、额度剩余百分比、剩余时间百分比以及消耗进度或额度重置状态，不包含
 OAuth、账户 ID、邮箱、API Key 或模型请求内容。`BARK_PUSH_URL` 必须是无 userinfo、query、
 fragment 和尾部斜杠的精确 HTTPS 端点；Worker 对 Bark 响应使用手动重定向策略，避免把设备
 key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受该服务能够看到上述用量元数据；
