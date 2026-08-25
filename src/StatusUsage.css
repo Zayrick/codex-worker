@@ -2,9 +2,7 @@
 	min-height: 100vh;
 	min-height: 100svh;
 	padding: clamp(28px, 5vw, 72px) clamp(16px, 4vw, 56px);
-	background:
-		radial-gradient(circle at 18% 0%, rgb(37 99 235 / 0.08), transparent 34rem),
-		var(--page);
+	background: var(--page);
 }
 
 .usage-shell {
@@ -39,7 +37,6 @@
 	background: var(--surface);
 	color: var(--text-secondary);
 	text-align: center;
-	box-shadow: var(--shadow-sm);
 }
 
 .usage-error {
@@ -59,9 +56,7 @@
 .timeline-loading span {
 	height: 42px;
 	border-radius: 10px;
-	background: linear-gradient(90deg, var(--surface-subtle), var(--surface-hover), var(--surface-subtle));
-	background-size: 220% 100%;
-	animation: usage-shimmer 1.4s linear infinite;
+	background: var(--surface-hover);
 }
 
 .timeline-card {
@@ -69,7 +64,6 @@
 	border: 1px solid var(--border);
 	border-radius: 18px;
 	background: var(--surface);
-	box-shadow: var(--shadow-md);
 }
 
 .timeline-scroll {
@@ -142,10 +136,12 @@
 }
 
 .axis-day.today {
-	background: var(--primary-soft);
+	background: var(--surface-hover);
 }
 
 .quota-lane {
+	--quota-color: #4f6f9f;
+
 	border-bottom: 1px solid var(--border);
 }
 
@@ -191,11 +187,11 @@
 	width: 8px;
 	height: 8px;
 	border-radius: 50%;
-	background: #2563eb;
+	background: var(--quota-color);
 }
 
-.category-code_review .lane-dot { background: #8b5cf6; }
-.category-additional .lane-dot { background: #d97706; }
+.category-code_review { --quota-color: #8061a8; }
+.category-additional { --quota-color: #9a6838; }
 
 .lane-track {
 	position: relative;
@@ -213,7 +209,7 @@
 }
 
 .track-days > span.today {
-	background: rgb(37 99 235 / 0.035);
+	background: var(--surface-subtle);
 }
 
 .timeline-now-overlay {
@@ -242,19 +238,19 @@
 	height: 16px;
 	overflow: hidden;
 	border-radius: 999px;
-	background: rgb(37 99 235 / 0.08);
-	border: 1px solid transparent;
+	background: var(--surface-subtle);
+	border: 1px solid var(--border-strong);
 	color: var(--text-secondary);
 	min-width: 2px;
 }
 
 .quota-segment.live {
-	border-color: rgb(37 99 235 / 0.4);
-	background: rgb(37 99 235 / 0.18);
+	border-color: var(--quota-color);
+	background: var(--surface-subtle);
 }
 
 .quota-segment.future {
-	border-color: rgb(37 99 235 / 0.32);
+	border-color: var(--border-strong);
 	border-style: dashed;
 	background: transparent;
 }
@@ -263,13 +259,11 @@
 	opacity: 0.42;
 }
 
-.category-code_review .quota-segment { border-color: rgb(139 92 246 / 0.34); background-color: rgb(139 92 246 / 0.1); }
-.category-additional .quota-segment { border-color: rgb(217 119 6 / 0.34); background-color: rgb(217 119 6 / 0.1); }
-
 .segment-remaining {
 	position: absolute;
 	inset: 0 0 0 auto;
-	background: rgb(37 99 235 / 0.28);
+	background: var(--quota-color);
+	opacity: 0.58;
 }
 
 .quota-segment b {
@@ -328,17 +322,13 @@
 	width: 20px;
 	height: 9px;
 	border-radius: 999px;
-	background: rgb(37 99 235 / 0.18);
-	border: 1px solid rgb(37 99 235 / 0.4);
+	background: var(--surface-hover);
+	border: 1px solid var(--border-strong);
 }
 
 .timeline-legend .legend-future { background: transparent; border-style: dashed; }
 .timeline-legend .legend-past { opacity: 0.4; }
 .timeline-legend .legend-note { margin-left: auto; }
-
-@keyframes usage-shimmer {
-	to { background-position: -220% 0; }
-}
 
 @media (max-width: 720px) {
 	.usage-page { padding: 24px 12px; }
@@ -347,8 +337,4 @@
 	.axis-day b { font-size: 8px; }
 	.lane-heading { padding-inline: 10px; }
 	.lane-heading strong { max-width: 120px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.timeline-loading span { animation: none; }
 }
