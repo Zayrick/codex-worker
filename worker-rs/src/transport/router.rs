@@ -25,6 +25,13 @@ pub async fn handle_fetch(
     let method = request.inner().method();
     let now_ms = i64::try_from(Date::now().as_millis()).unwrap_or(i64::MAX);
 
+    if WorkerConfig::auth_proxy_host(&env)
+        .as_deref()
+        .is_some_and(|host| matches_auth_proxy_request(host, &url))
+    {
+        return handle_auth_proxy(request, url, &env, now_ms).await;
+    }
+
     if method == "GET" && url.path() == "/healthz" {
         let encryption_key = match WorkerConfig::encryption_key(&env) {
             Ok(key) => key,
@@ -49,13 +56,6 @@ pub async fn handle_fetch(
         && let Some(matched) = match_admin_route(&method, url.path(), &admin_path)
     {
         return handle_admin(matched, &mut request, &env, now_ms).await;
-    }
-
-    if WorkerConfig::auth_proxy_host(&env)
-        .as_deref()
-        .is_some_and(|host| matches_auth_proxy_request(host, &url))
-    {
-        return handle_auth_proxy(request, url, &env, now_ms).await;
     }
 
     if method == "OPTIONS" && is_known_api_path(url.path()) {

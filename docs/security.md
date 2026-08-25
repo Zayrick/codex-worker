@@ -21,7 +21,7 @@ relay 主机及 OpenAI 账户的安全由部署者负责。
 | --- | --- | --- |
 | `ADMIN_PATH` | 隐藏管理入口，降低无目标扫描 | 旧管理 URL 失效 |
 | `ADMIN_SECRET` | 验证管理登录，并参与会话绑定 | 所有现有管理会话失效 |
-| `AUTH_PROXY_HOST` | 指定 Backend API 凭据代理的入站 Host | 后续请求按新 Host 分流 |
+| `AUTH_PROXY_HOST` | 指定整站镜像代理的入站 Host | 后续请求按新 Host 分流 |
 | `BARK_PUSH_URL` | 指定包含设备 key 的 Bark HTTPS 推送端点 | 后续用量提醒切换到新设备或服务 |
 | `CHATGPT_RELAY_URL` | 指定受信任上游 relay | 后续流量切换到新信任主体 |
 | `DATA_ENCRYPTION_KEY` | 加密持久化凭据、用量、设备 state 与管理会话 | 现有加密数据和会话无法读取 |
@@ -119,12 +119,13 @@ fragment 和尾部斜杠的精确 HTTPS 端点；Worker 对 Bark 响应使用手
 key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受该服务能够看到上述用量元数据；
 否则应使用受信任的自托管 Bark 服务。
 
-### Backend API 凭据代理
+### 镜像代理与 Backend API 凭据替换
 
-`AUTH_PROXY_HOST` 上的 `/backend-api` 请求将端到端 header 和正文发送到
-`CHATGPT_RELAY_URL`。匹配已启用代理账户的 `account_id` 优先使用按代理 UUID 独立加密的 OAuth；
+`AUTH_PROXY_HOST` 上的所有请求都将端到端 header 和正文发送到 `CHATGPT_RELAY_URL`，因此该
+Host 与 relay 必须处于部署者控制的信任边界内。只有 `/backend-api` 路径族允许修改凭据：匹配
+已启用代理账户的 `account_id` 优先使用按代理 UUID 独立加密的 OAuth；
 未独立登录、Token 已过期或缺少账户 ID 时使用主 OAuth。已停用或未匹配的请求保留原
-Authorization、账户 ID 和 Cookie。该 Host 与 relay 都必须处于部署者控制的信任边界内。
+Authorization、账户 ID 和 Cookie。其他路径始终原样保留 Authorization、账户 ID 和 Cookie。
 
 ## 7. KV 一致性与撤销语义
 

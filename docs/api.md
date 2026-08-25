@@ -20,7 +20,7 @@ Codex Worker 通过协议转换、Codex 原生映射和透明传输提供多种�
 
 ## 2. 鉴权与通用行为
 
-除健康检查、已知 API 的预检请求、管理入口和 Backend API 凭据代理外，所有公开 API 都要求一个
+除健康检查、已知 API 的预检请求、管理入口和镜像代理 Host 外，所有公开 API 都要求一个
 已启用的下游 API Key。支持以下 header，选择优先级固定：
 
 1. `Authorization: Bearer <key>`；
@@ -64,13 +64,15 @@ CORS。
 一般透明代理路径拒绝 `CONNECT`；`OPTIONS` 由预检逻辑处理。除表中明确限制方法的路径外，
 路由层允许其他 HTTP 方法，上游能力仍由目标 action 决定。
 
-### Backend API 凭据代理
+### 镜像代理与 Backend API 凭据替换
 
-Host 与 `AUTH_PROXY_HOST` 匹配的 `/backend-api` 路径族使用 `CHATGPT_RELAY_URL` 作为上游，
-保留请求方法、路径、Query、流式正文和端到端 header，并直接返回上游 HTTP、SSE 或 WebSocket
-响应。该路由独立于公开 API Key 鉴权和协议转换。
+Host 与 `AUTH_PROXY_HOST` 匹配的所有路径都使用 `CHATGPT_RELAY_URL` 作为上游，保留请求方法、
+路径、Query、流式正文和端到端 header，并直接返回上游 HTTP、SSE 或 WebSocket 响应。镜像 Host
+优先于健康检查、管理面、静态资源和公开 API 路由；该 Host 上的全部请求都独立于公开 API Key
+鉴权和协议转换。
 
-管理端维护代理账户的名称、`account_id`、启用状态和独立 OAuth。请求中的
+只有 `/backend-api` 路径族允许替换凭据；其他路径原样保留 `Authorization`、
+`ChatGPT-Account-ID` 和 Cookie。管理端维护代理账户的名称、`account_id`、启用状态和独立 OAuth。请求中的
 `ChatGPT-Account-ID` 精确匹配一条已启用记录时，Worker 优先使用该记录自己的有效 OAuth；
 该记录尚未登录、Token 已过期或凭据缺少账户 ID 时自动回退到主 Codex OAuth。
 两者都会替换请求中已有的 `Authorization` 和 `ChatGPT-Account-ID`。记录已停用或未匹配时按
@@ -175,10 +177,10 @@ Cloudflare 的请求、连接和 WebSocket 限制可能变化，请以当前
 - 未匹配路径、错误方法和无效下游 API Key 返回空正文 `404`；
 - Worker 生成的协议错误分别使用 OpenAI、Anthropic 或 Google envelope；
 - 只有已确认的公开 API 响应添加 CORS header；管理响应不添加 CORS；
-- 公开协议 API 和管理响应使用 `Cache-Control: no-store`；Backend API 凭据代理保留上游响应
+- 公开协议 API 和管理响应使用 `Cache-Control: no-store`；镜像代理保留上游响应
   header；
-- 公开协议 API 过滤客户端凭据、Cookie 和账户 ID；Backend API 凭据代理按许可配置处理认证
-  header。
+- 公开协议 API 过滤客户端凭据、Cookie 和账户 ID；镜像代理仅在 `/backend-api` 路径族按许可
+  配置处理认证 header，其他路径保持原始凭据。
 
 默认 `CORS_ORIGIN` 为 `*`，当前配置只支持一个原样的 origin 值，不实现动态 allowlist，也不
 启用 credentialed CORS。

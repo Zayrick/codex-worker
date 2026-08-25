@@ -26,7 +26,10 @@ pub fn matches_auth_proxy_request(configured_host: &str, client_url: &Url) -> bo
         .host_str()
         .and_then(normalize_auth_proxy_host)
         .is_some_and(|host| host == configured_host)
-        && is_backend_api_path(client_url.path())
+}
+
+pub fn uses_auth_proxy_credentials(pathname: &str) -> bool {
+    is_backend_api_path(pathname)
 }
 
 pub fn resolve_auth_proxy_url(relay_origin: &str, client_url: &Url) -> AppResult<Url> {
@@ -129,19 +132,31 @@ mod tests {
     }
 
     #[test]
-    fn matches_only_the_exact_configured_host_and_backend_api_family() {
-        let matching = Url::parse("https://Proxy.Example/backend-api/codex/models").unwrap();
-        assert!(matches_auth_proxy_request("proxy.example", &matching));
-        assert!(matches_auth_proxy_request("proxy.example.", &matching));
-        assert!(!matches_auth_proxy_request("other.example", &matching));
+    fn matches_every_path_only_on_the_exact_configured_host() {
+        for path in [
+            "/",
+            "/backend-api/codex/models",
+            "/assets/app.js",
+            "/healthz",
+        ] {
+            let matching = Url::parse(&format!("https://Proxy.Example{path}")).unwrap();
+            assert!(matches_auth_proxy_request("proxy.example", &matching));
+            assert!(matches_auth_proxy_request("proxy.example.", &matching));
+            assert!(!matches_auth_proxy_request("other.example", &matching));
+        }
         assert!(!matches_auth_proxy_request(
             "https://proxy.example",
-            &matching
+            &Url::parse("https://proxy.example/").unwrap()
         ));
-        assert!(!matches_auth_proxy_request(
-            "proxy.example",
-            &Url::parse("https://proxy.example/backend-api-legacy").unwrap()
-        ));
+    }
+
+    #[test]
+    fn replaces_credentials_only_for_the_backend_api_path_family() {
+        assert!(uses_auth_proxy_credentials("/backend-api"));
+        assert!(uses_auth_proxy_credentials("/backend-api/codex/models"));
+        assert!(!uses_auth_proxy_credentials("/"));
+        assert!(!uses_auth_proxy_credentials("/backend-api-legacy"));
+        assert!(!uses_auth_proxy_credentials("/assets/backend-api"));
     }
 
     #[test]
@@ -157,6 +172,14 @@ mod tests {
             "https://relay.example/backend-api/codex/models?client_version=1.2.3&channel=stable"
         );
         assert!(resolve_auth_proxy_url("https://proxy.example", &client).is_err());
+
+        let asset = Url::parse("https://proxy.example/assets/app.js?v=42").unwrap();
+        assert_eq!(
+            resolve_auth_proxy_url("https://relay.example", &asset)
+                .unwrap()
+                .as_str(),
+            "https://relay.example/assets/app.js?v=42"
+        );
     }
 
     #[test]

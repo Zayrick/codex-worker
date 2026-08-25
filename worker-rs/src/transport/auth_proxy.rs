@@ -9,7 +9,9 @@ use crate::{
     },
     core::{ApiError, AppResult},
     upstream::{
-        auth_proxy::{auth_proxy_request_headers, resolve_auth_proxy_url},
+        auth_proxy::{
+            auth_proxy_request_headers, resolve_auth_proxy_url, uses_auth_proxy_credentials,
+        },
         codex::{CodexCredentials, HeaderBag},
     },
 };
@@ -34,8 +36,12 @@ async fn dispatch_auth_proxy(
     env: &Env,
     now_ms: i64,
 ) -> AppResult<Response> {
-    let encryption_key = WorkerConfig::encryption_key(env)?;
     let relay_origin = WorkerConfig::relay_origin(env)?;
+    if !uses_auth_proxy_credentials(client_url.path()) {
+        return forward_auth_proxy(request, client_url, &relay_origin, None).await;
+    }
+
+    let encryption_key = WorkerConfig::encryption_key(env)?;
     let store = CloudflareSecretStore::from_env(env)?;
     let configured_accounts = ApiKeyRepository::new(&store, &encryption_key)
         .read_auth_proxy_accounts()

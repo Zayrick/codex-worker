@@ -49,7 +49,7 @@ namespace 中的数据由当前 `DATA_ENCRYPTION_KEY` 加密。
 | --- | --- | --- |
 | `ADMIN_PATH` | 1–128 个 ASCII 字母、数字、`_` 或 `-` | 构成隐藏管理路径 |
 | `ADMIN_SECRET` | 独立生成的高强度随机值 | 验证管理登录并绑定会话 |
-| `AUTH_PROXY_HOST` | 不含 scheme、端口和路径的主机名 | Backend API 凭据代理的入站 Host |
+| `AUTH_PROXY_HOST` | 不含 scheme、端口和路径的主机名 | 整站镜像代理的入站 Host；仅 `/backend-api` 允许替换凭据 |
 | `BARK_PUSH_URL` | `https://<host>/<device-key>` | 接收 Codex 用量和消耗速度提醒 |
 | `CHATGPT_RELAY_URL` | 精确 HTTPS origin | ChatGPT Codex 与用量请求的 relay |
 | `DATA_ENCRYPTION_KEY` | 32 个随机字节的无填充 base64url | 加密持久化凭据和会话状态 |
