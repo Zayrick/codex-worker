@@ -1,14 +1,16 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use futures_util::{StreamExt, TryStreamExt, stream};
+use serde::Serialize;
 use serde_json::{Value, json};
 use worker::{AbortSignal, Date, Env, Headers, Method, Request, RequestInit, Response};
 
 use crate::{
     application::{AdminRoute, MatchedAdminRoute},
     auth::{
-        ApiKeyRepository, DeviceAuthorizationService, DevicePollResult, OAuthProvider,
-        OAuthRepository, admin_secret_matches, admin_session_cookie_header,
-        clear_admin_session_cookie_header, create_admin_session, has_valid_admin_session,
-        oauth_status,
+        ApiKeyRepository, AuthProxyAccount, DeviceAuthorizationService, DevicePollResult,
+        OAuthProvider, OAuthRepository, OAuthStatus, admin_secret_matches,
+        admin_session_cookie_header, clear_admin_session_cookie_header, create_admin_session,
+        has_valid_admin_session, oauth_status,
     },
     core::{ApiError, AppResult, JsonObject},
     upstream::codex::{codex_subscription_from_usage, codex_subscription_metadata},
@@ -25,6 +27,7 @@ use super::{
 
 const MAX_ADMIN_BODY_BYTES: usize = 16 * 1024;
 const CSP_NONCE_PLACEHOLDER: &str = "__CODEX_WORKER_CSP_NONCE__";
+const AUTH_PROXY_OAUTH_READ_CONCURRENCY: usize = 4;
 
 pub async fn handle_admin(
     matched: MatchedAdminRoute,
@@ -104,6 +107,8 @@ async fn dispatch(
             let credentials = oauth.read().await?;
             let api_keys = keys.read().await?;
             let auth_proxy_accounts = keys.read_auth_proxy_accounts().await?;
+            let auth_proxy_accounts =
+                auth_proxy_account_states(&store, &encryption_key, auth_proxy_accounts).await?;
             let oauth_status = credentials.as_ref().map(oauth_status);
             let subscription = credentials
                 .as_ref()
@@ -141,16 +146,7 @@ async fn dispatch(
         }
         AdminRoute::OAuthPoll => {
             let body = admin_json(request).await?;
-            let state = body
-                .get("state")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    ApiError::new(400, "Missing device authorization state.")
-                        .with_kind("invalid_request_error")
-                        .with_code("missing_required_parameter")
-                        .with_param("state")
-                })?;
+            let state = required_device_state(&body)?;
             let clock = CloudflareClock;
             let http = CloudflareOAuthHttpClient::new(Some(request.inner().signal()));
             let provider = OAuthProvider::new(&http, &clock);
@@ -182,50 +178,148 @@ async fn dispatch(
         }
         AdminRoute::ApiKeysUpdate => {
             let body = admin_json(request).await?;
-            let original_name = body.get("originalName").cloned().unwrap_or(Value::Null);
+            let id = body.get("id").cloned().unwrap_or(Value::Null);
             let value = Value::Object(body);
-            json_response(
-                &json!({ "apiKeys": keys.update(&original_name, &value).await? }),
-                200,
-            )
+            json_response(&json!({ "apiKeys": keys.update(&id, &value).await? }), 200)
         }
         AdminRoute::ApiKeysDelete => {
             let body = admin_json(request).await?;
-            let name = body.get("name").cloned().unwrap_or(Value::Null);
-            json_response(&json!({ "apiKeys": keys.delete(&name).await? }), 200)
+            let id = body.get("id").cloned().unwrap_or(Value::Null);
+            json_response(&json!({ "apiKeys": keys.delete(&id).await? }), 200)
         }
         AdminRoute::AuthProxyCreate => {
             let body = Value::Object(admin_json(request).await?);
-            json_response(
-                &json!({ "authProxyAccounts": keys.create_auth_proxy_account(&body).await? }),
-                201,
-            )
+            let accounts = keys.create_auth_proxy_account(&body).await?;
+            auth_proxy_accounts_response(&store, &encryption_key, accounts, 201).await
         }
         AdminRoute::AuthProxyUpdate => {
             let body = admin_json(request).await?;
-            let original_name = body.get("originalName").cloned().unwrap_or(Value::Null);
+            let id = body.get("id").cloned().unwrap_or(Value::Null);
             let value = Value::Object(body);
-            json_response(
-                &json!({
-                    "authProxyAccounts": keys
-                        .update_auth_proxy_account(&original_name, &value)
-                        .await?
-                }),
-                200,
-            )
+            let accounts = keys.update_auth_proxy_account(&id, &value).await?;
+            auth_proxy_accounts_response(&store, &encryption_key, accounts, 200).await
         }
         AdminRoute::AuthProxyDelete => {
             let body = admin_json(request).await?;
-            let name = body.get("name").cloned().unwrap_or(Value::Null);
-            json_response(
-                &json!({
-                    "authProxyAccounts": keys.delete_auth_proxy_account(&name).await?
-                }),
-                200,
-            )
+            let id = body.get("id").cloned().unwrap_or(Value::Null);
+            let account = keys.auth_proxy_account(&id).await?;
+            OAuthRepository::for_auth_proxy_account(&store, &encryption_key, &account.id)
+                .delete()
+                .await?;
+            let accounts = keys.delete_auth_proxy_account(&id).await?;
+            auth_proxy_accounts_response(&store, &encryption_key, accounts, 200).await
+        }
+        AdminRoute::AuthProxyOAuthStart => {
+            let body = admin_json(request).await?;
+            let id = body.get("id").cloned().unwrap_or(Value::Null);
+            let account = keys.auth_proxy_account(&id).await?;
+            let account_oauth =
+                OAuthRepository::for_auth_proxy_account(&store, &encryption_key, &account.id);
+            let clock = CloudflareClock;
+            let http = CloudflareOAuthHttpClient::new(Some(request.inner().signal()));
+            let provider = OAuthProvider::new(&http, &clock);
+            let service = DeviceAuthorizationService::scoped(
+                &account_oauth,
+                &provider,
+                &clock,
+                &encryption_key,
+                &account.id,
+            );
+            json_response(&service.start().await?, 201)
+        }
+        AdminRoute::AuthProxyOAuthPoll => {
+            let body = admin_json(request).await?;
+            let id = body.get("id").cloned().unwrap_or(Value::Null);
+            let state = required_device_state(&body)?;
+            let account = keys.auth_proxy_account(&id).await?;
+            let account_oauth =
+                OAuthRepository::for_auth_proxy_account(&store, &encryption_key, &account.id);
+            let clock = CloudflareClock;
+            let http = CloudflareOAuthHttpClient::new(Some(request.inner().signal()));
+            let provider = OAuthProvider::new(&http, &clock);
+            let service = DeviceAuthorizationService::scoped(
+                &account_oauth,
+                &provider,
+                &clock,
+                &encryption_key,
+                &account.id,
+            );
+            match service.poll(state).await? {
+                DevicePollResult::Pending { retry_after } => json_response(
+                    &json!({ "status": "pending", "retryAfter": retry_after }),
+                    202,
+                ),
+                DevicePollResult::Stored { credentials } => json_response(
+                    &json!({
+                        "status": "stored",
+                        "oauth": oauth_status(&credentials),
+                    }),
+                    200,
+                ),
+            }
+        }
+        AdminRoute::AuthProxyOAuthDelete => {
+            let body = admin_json(request).await?;
+            let id = body.get("id").cloned().unwrap_or(Value::Null);
+            let account = keys.auth_proxy_account(&id).await?;
+            OAuthRepository::for_auth_proxy_account(&store, &encryption_key, &account.id)
+                .delete()
+                .await?;
+            json_response(&json!({ "oauth": Value::Null }), 200)
         }
         AdminRoute::Page | AdminRoute::Login | AdminRoute::Logout => Err(invalid_admin_request()),
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthProxyAccountState {
+    #[serde(flatten)]
+    account: AuthProxyAccount,
+    oauth: Option<OAuthStatus>,
+}
+
+async fn auth_proxy_account_states(
+    store: &CloudflareSecretStore,
+    encryption_key: &str,
+    accounts: Vec<AuthProxyAccount>,
+) -> AppResult<Vec<AuthProxyAccountState>> {
+    stream::iter(accounts)
+        .map(|account| {
+            let oauth = OAuthRepository::for_auth_proxy_account(store, encryption_key, &account.id);
+            async move {
+                let credentials = oauth.read().await?;
+                Ok(AuthProxyAccountState {
+                    account,
+                    oauth: credentials.as_ref().map(oauth_status),
+                })
+            }
+        })
+        .buffered(AUTH_PROXY_OAUTH_READ_CONCURRENCY)
+        .try_collect()
+        .await
+}
+
+async fn auth_proxy_accounts_response(
+    store: &CloudflareSecretStore,
+    encryption_key: &str,
+    accounts: Vec<AuthProxyAccount>,
+    status: u16,
+) -> AppResult<Response> {
+    let accounts = auth_proxy_account_states(store, encryption_key, accounts).await?;
+    json_response(&json!({ "authProxyAccounts": accounts }), status)
+}
+
+fn required_device_state(body: &JsonObject) -> AppResult<&str> {
+    body.get("state")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ApiError::new(400, "Missing device authorization state.")
+                .with_kind("invalid_request_error")
+                .with_code("missing_required_parameter")
+                .with_param("state")
+        })
 }
 
 async fn admin_json(request: &mut Request) -> AppResult<JsonObject> {

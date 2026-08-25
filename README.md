@@ -11,10 +11,10 @@ OpenAI、Anthropic 和 Gemini 风格的接口。
 
 - 提供 Responses、Chat Completions、Completions、Anthropic Messages 和 Gemini Content 接口；
 - 支持 JSON、SSE、WebSocket、multipart 与二进制流式传输；
-- 通过管理界面完成 Codex 设备授权、订阅额度查看、下游 API Key 和代理账户许可管理；
-- 在配置的 Host 上代理 `/backend-api/*`，按 `account_id` 选择认证透传或 Codex 凭据替换；
+- 通过管理界面完成 Codex 设备授权、订阅额度查看、下游 API Key、代理账户许可和代理账户独立登录管理；
+- 在配置的 Host 上代理 `/backend-api/*`，按 `account_id` 选择独立代理 OAuth、主 OAuth 回退或原认证透传；
 - 使用 Workers KV 保存 OAuth 凭据、API Key 与 Codex 用量快照，并以 AES-256-GCM 加密；
-- 每 5 分钟采集 Codex 用量、刷新即将过期的 OAuth 凭据，并通过 Bark 提醒异常消耗速度；
+- 每 5 分钟采集 Codex 用量、分别刷新即将过期的主账户与代理账户 OAuth 凭据，并通过 Bark 提醒异常消耗速度；
 - 将 React 管理端与 Rust/Wasm Worker 构建为同一个 Cloudflare 部署单元。
 
 ## 系统组成

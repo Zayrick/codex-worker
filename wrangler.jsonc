@@ -55,7 +55,7 @@
 		}
 	],
 
-	// Sample Codex usage and check OAuth refresh every five minutes.
+	// Run scheduled maintenance every five minutes.
 	"triggers": {
 		"crons": ["*/5 * * * *"]
 	}

@@ -271,6 +271,50 @@ fn device_flow_rejects_expired_invalid_and_aborted_sessions() {
 }
 
 #[test]
+fn device_state_is_bound_to_the_proxy_record_id() {
+    let http = FakeHttp::default();
+    http.push(response(
+        200,
+        json!({
+            "device_auth_id": "device",
+            "user_code": "CODE",
+            "interval": 1
+        }),
+    ));
+    let clock = FakeClock::new(NOW_MS);
+    let provider = OAuthProvider::new(&http, &clock);
+    let secret_store = MemorySecretStore::default();
+    let first = OAuthRepository::for_auth_proxy_account(
+        &secret_store,
+        MASTER_KEY,
+        "00000000-0000-4000-8000-000000000001",
+    );
+    let second = OAuthRepository::for_auth_proxy_account(
+        &secret_store,
+        MASTER_KEY,
+        "00000000-0000-4000-8000-000000000002",
+    );
+    let first_service = DeviceAuthorizationService::scoped(
+        &first,
+        &provider,
+        &clock,
+        MASTER_KEY,
+        "00000000-0000-4000-8000-000000000001",
+    );
+    let second_service = DeviceAuthorizationService::scoped(
+        &second,
+        &provider,
+        &clock,
+        MASTER_KEY,
+        "00000000-0000-4000-8000-000000000002",
+    );
+    let authorization = block_on_ready(first_service.start()).unwrap();
+    let error = block_on_ready(second_service.poll(&authorization.state)).unwrap_err();
+    assert_eq!(error.code.as_deref(), Some("invalid_device_session"));
+    assert_eq!(http.requests().len(), 1);
+}
+
+#[test]
 fn refresh_retries_transient_failures_and_rotates_encrypted_credentials() {
     let http = FakeHttp::default();
     http.push(Err(OAuthHttpFailure::Network));
@@ -315,6 +359,47 @@ fn refresh_retries_transient_failures_and_rotates_encrypted_credentials() {
         assert!(!format!("{request:?}").contains("refresh-original"));
     }
     assert!(http.is_empty());
+}
+
+#[test]
+fn proxy_credentials_are_uuid_scoped_and_fall_back_to_primary() {
+    let secret_store = MemorySecretStore::default();
+    let primary = OAuthRepository::new(&secret_store, MASTER_KEY);
+    let proxy_id = "00000000-0000-4000-8000-000000000001";
+    let proxy = OAuthRepository::for_auth_proxy_account(&secret_store, MASTER_KEY, proxy_id);
+    block_on_ready(primary.store(&credentials(NOW_MS + 60_000))).unwrap();
+
+    let selected =
+        block_on_ready(auth_proxy_credentials_or_primary(&proxy, &primary, NOW_MS)).unwrap();
+    assert_eq!(selected.token, "access-original");
+
+    let mut proxy_credentials = credentials(NOW_MS + 60_000);
+    proxy_credentials.access_token = "access-proxy-sensitive".into();
+    proxy_credentials.refresh_token = "refresh-proxy-sensitive".into();
+    proxy_credentials.account_id = Some("account-proxy".into());
+    block_on_ready(proxy.store(&proxy_credentials)).unwrap();
+    let selected =
+        block_on_ready(auth_proxy_credentials_or_primary(&proxy, &primary, NOW_MS)).unwrap();
+    assert_eq!(selected.token, "access-proxy-sensitive");
+    assert_eq!(selected.account_id.as_deref(), Some("account-proxy"));
+
+    proxy_credentials.account_id = None;
+    block_on_ready(proxy.store(&proxy_credentials)).unwrap();
+    let selected =
+        block_on_ready(auth_proxy_credentials_or_primary(&proxy, &primary, NOW_MS)).unwrap();
+    assert_eq!(selected.token, "access-original");
+
+    proxy_credentials.account_id = Some("account-proxy".into());
+    proxy_credentials.expires_at = NOW_MS;
+    block_on_ready(proxy.store(&proxy_credentials)).unwrap();
+    let selected =
+        block_on_ready(auth_proxy_credentials_or_primary(&proxy, &primary, NOW_MS)).unwrap();
+    assert_eq!(selected.token, "access-original");
+
+    let encrypted = secret_store
+        .raw(&format!("oauth:auth-proxy:{proxy_id}"))
+        .unwrap();
+    assert!(!encrypted.contains("access-proxy-sensitive"));
 }
 
 #[test]

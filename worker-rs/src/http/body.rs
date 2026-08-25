@@ -48,8 +48,7 @@ fn parse_object(encoded: &[u8], content_encoding: Option<&str>) -> AppResult<Jso
         Cow::Borrowed(encoded)
     };
 
-    // TextDecoder replaces malformed UTF-8, so preserve that compatibility
-    // before serde_json validates the resulting JSON text.
+    // Match TextDecoder by replacing malformed UTF-8 before JSON validation.
     let text = String::from_utf8_lossy(&decoded);
     match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(object)) => Ok(object),

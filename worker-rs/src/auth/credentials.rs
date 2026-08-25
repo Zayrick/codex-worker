@@ -10,6 +10,8 @@ use super::{SecretStore, oauth_ports::OAuthCredentialsStore, open_json, seal_jso
 
 const OAUTH_KEY: &str = "oauth";
 const OAUTH_ENVELOPE_PURPOSE: &str = "codex-worker/oauth/v1";
+const AUTH_PROXY_OAUTH_KEY_PREFIX: &str = "oauth:auth-proxy:";
+const AUTH_PROXY_OAUTH_ENVELOPE_PURPOSE_PREFIX: &str = "codex-worker/oauth/auth-proxy/v1/";
 const DEFAULT_TOKEN_LIFETIME_MS: i64 = 55 * 60 * 1_000;
 const MAX_OAUTH_ENVELOPE_CHARS: usize = 128 * 1_024;
 
@@ -45,21 +47,41 @@ pub struct OAuthStatus {
 pub struct OAuthRepository<'a> {
     store: &'a dyn SecretStore,
     master_key: &'a str,
+    storage_key: String,
+    envelope_purpose: String,
 }
 
 impl<'a> OAuthRepository<'a> {
     pub fn new(store: &'a dyn SecretStore, master_key: &'a str) -> Self {
-        Self { store, master_key }
+        Self {
+            store,
+            master_key,
+            storage_key: OAUTH_KEY.into(),
+            envelope_purpose: OAUTH_ENVELOPE_PURPOSE.into(),
+        }
+    }
+
+    pub fn for_auth_proxy_account(
+        store: &'a dyn SecretStore,
+        master_key: &'a str,
+        record_id: &str,
+    ) -> Self {
+        Self {
+            store,
+            master_key,
+            storage_key: format!("{AUTH_PROXY_OAUTH_KEY_PREFIX}{record_id}"),
+            envelope_purpose: format!("{AUTH_PROXY_OAUTH_ENVELOPE_PURPOSE_PREFIX}{record_id}"),
+        }
     }
 
     pub async fn read(&self) -> AppResult<Option<StoredOAuthCredentials>> {
-        let Some(encrypted) = self.store.get(OAUTH_KEY, Some(30)).await? else {
+        let Some(encrypted) = self.store.get(&self.storage_key, Some(30)).await? else {
             return Ok(None);
         };
         if encrypted.len() > MAX_OAUTH_ENVELOPE_CHARS {
             return Err(invalid_stored_credentials());
         }
-        let value = open_json(&encrypted, self.master_key, OAUTH_ENVELOPE_PURPOSE)
+        let value = open_json(&encrypted, self.master_key, &self.envelope_purpose)
             .map_err(|_| invalid_stored_credentials())?;
         validate_stored_credentials(value).map(Some)
     }
@@ -68,17 +90,17 @@ impl<'a> OAuthRepository<'a> {
         let value = serde_json::to_value(credentials).map_err(|_| invalid_stored_credentials())?;
         let validated = validate_stored_credentials(value)?;
         let value = serde_json::to_value(validated).map_err(|_| invalid_stored_credentials())?;
-        let encrypted = seal_json(&value, self.master_key, OAUTH_ENVELOPE_PURPOSE)
+        let encrypted = seal_json(&value, self.master_key, &self.envelope_purpose)
             .map_err(|_| invalid_stored_credentials())?;
-        self.store.put(OAUTH_KEY, &encrypted).await
+        self.store.put(&self.storage_key, &encrypted).await
     }
 
     pub async fn delete(&self) -> AppResult<()> {
-        self.store.delete(OAUTH_KEY).await
+        self.store.delete(&self.storage_key).await
     }
 
     pub async fn require_unconfigured(&self) -> AppResult<()> {
-        if self.store.get(OAUTH_KEY, None).await?.is_some() {
+        if self.store.get(&self.storage_key, None).await?.is_some() {
             return Err(
                 ApiError::new(409, "OAuth credentials are already configured.")
                     .with_kind("invalid_request_error")
@@ -113,6 +135,39 @@ impl<'a> OAuthRepository<'a> {
             account_id: credentials.account_id,
         })
     }
+
+    pub async fn valid_codex_credentials(
+        &self,
+        now_ms: i64,
+    ) -> AppResult<Option<CodexCredentials>> {
+        let Some(credentials) = self.read().await? else {
+            return Ok(None);
+        };
+        if credentials.expires_at <= now_ms {
+            return Ok(None);
+        }
+        Ok(Some(CodexCredentials {
+            token: credentials.access_token,
+            account_id: credentials.account_id,
+        }))
+    }
+}
+
+pub async fn auth_proxy_credentials_or_primary(
+    auth_proxy: &OAuthRepository<'_>,
+    primary: &OAuthRepository<'_>,
+    now_ms: i64,
+) -> AppResult<CodexCredentials> {
+    if let Some(credentials) = auth_proxy.valid_codex_credentials(now_ms).await?
+        && credentials
+            .account_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    {
+        return Ok(credentials);
+    }
+    primary.codex_credentials(now_ms).await
 }
 
 #[async_trait(?Send)]

@@ -36,12 +36,13 @@ CI 输出。
 
 ## 3. 持久化加密
 
-`AUTH_KV` 中有三个长期记录：
+`AUTH_KV` 中有以下长期记录和键族：
 
 | KV key | 明文内容 | 存储形式 |
 | --- | --- | --- |
 | `oauth` | access token、refresh token、账户 ID、邮箱和过期时间 | AES-256-GCM envelope |
-| `API_KEYS` | API Key 名称、值和启用状态，以及代理账户的名称、`account_id` 和启用状态 | AES-256-GCM envelope |
+| `oauth:auth-proxy:<uuid>` | 单个代理账户的 access token、refresh token、账户 ID、邮箱和过期时间 | 按代理 UUID 绑定 purpose 的 AES-256-GCM envelope |
+| `API_KEYS` | API Key UUID、名称、值和启用状态，以及代理账户 UUID、名称、`account_id` 和启用状态 | AES-256-GCM envelope |
 | `CODEX_USAGE` | 订阅类型、用量百分比、额度重置时间和告警状态 | AES-256-GCM envelope |
 
 每次写入生成新的 12 字节 IV。OAuth、API Key 与代理设置、Codex 用量、设备授权 state 和管理
@@ -57,6 +58,7 @@ API Key 在 KV 中是可恢复的加密值，以便管理端显示和编辑；�
 
 每个 API Key 必须满足：
 
+- 使用后端分配的 UUID 作为记录 ID；
 - 长度为 11–512 个 UTF-16 code unit；
 - 同时包含字母、数字和非空白符号；
 - Key 值唯一；
@@ -115,9 +117,9 @@ key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受
 ### Backend API 凭据代理
 
 `AUTH_PROXY_HOST` 上的 `/backend-api` 请求将端到端 header 和正文发送到
-`CHATGPT_RELAY_URL`。匹配已启用代理账户的 `account_id` 使用已保存的 Codex OAuth 凭据；已停用、
-未匹配或未配置的请求保留原 Authorization、账户 ID 和 Cookie。该 Host 与 relay 都必须处于
-部署者控制的信任边界内。
+`CHATGPT_RELAY_URL`。匹配已启用代理账户的 `account_id` 优先使用按代理 UUID 独立加密的 OAuth；
+未独立登录、Token 已过期或缺少账户 ID 时使用主 OAuth。已停用或未匹配的请求保留原
+Authorization、账户 ID 和 Cookie。该 Host 与 relay 都必须处于部署者控制的信任边界内。
 
 ## 7. KV 一致性与撤销语义
 
@@ -126,6 +128,7 @@ Workers KV 是最终一致存储。本项目对 OAuth 和 API Key 常规读取�
 
 - 停用、删除或轮换 API Key 不保证全球即时生效；
 - 删除 OAuth 不保证所有边缘位置立即停止看到旧记录；
+- 代理账户独立登录或退出后，其他边缘位置可能短暂继续使用主凭据回退或旧代理凭据；
 - `API_KEYS` 的并发读改写可能发生最后写入者覆盖；
 - `CODEX_USAGE` 的连续快照可能短暂读取到上一轮状态，从而延迟或重复一次 Bark 提醒；
 - 该管理面适用于低频、单管理员操作，不提供事务保证。
@@ -137,8 +140,8 @@ Workers KV 是最终一致存储。本项目对 OAuth 和 API Key 常规读取�
 ## 8. OAuth 生命周期
 
 普通 API 请求只接受尚未过期的 OAuth 凭据，不在请求路径中刷新 token。Cron Trigger 每 5 分钟
-直接检查 KV 中 OAuth 凭据的 `expiresAt`；凭据将在三小时内过期时执行刷新。刷新请求最长等待
-10 秒，对网络错误、HTTP 429 和 5xx 最多尝试三次。
+直接检查 KV 中主账户和所有代理账户 OAuth 凭据的 `expiresAt`；每项凭据都在三小时内过期时
+独立刷新。刷新请求最长等待 10 秒，对网络错误、HTTP 429 和 5xx 最多尝试三次。
 
 这种设计降低了多个边缘 isolate 同时消费旋转式 refresh token 的风险，但不提供全局锁。
 部署者应监控定时刷新失败的固定错误 code，并通过管理界面在必要时重新授权。

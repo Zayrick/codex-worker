@@ -1,12 +1,15 @@
+use futures_util::{StreamExt, stream};
 use serde_json::json;
 use worker::{Date, Env, ScheduleContext, ScheduledEvent};
 
 use crate::{
     application::evaluate_codex_usage,
-    auth::{OAuthProvider, OAuthRefreshService, OAuthRepository},
+    auth::{ApiKeyRepository, OAuthProvider, OAuthRefreshService, OAuthRepository},
     core::{ApiError, AppResult},
     upstream::codex::codex_subscription_from_usage,
 };
+
+const AUTH_PROXY_REFRESH_CONCURRENCY: usize = 4;
 
 use super::{
     bark::BarkClient,
@@ -40,6 +43,33 @@ pub async fn handle_scheduled(_event: ScheduledEvent, env: Env, _context: Schedu
     if let Err(error) = service.refresh(Some(now_ms)).await {
         log_api_failure("scheduled_oauth_refresh", &error);
     }
+
+    let accounts = match ApiKeyRepository::new(&store, &encryption_key)
+        .read_auth_proxy_accounts()
+        .await
+    {
+        Ok(accounts) => accounts,
+        Err(error) => {
+            log_api_failure("scheduled_auth_proxy_oauth_refresh", &error);
+            return;
+        }
+    };
+    stream::iter(accounts)
+        .for_each_concurrent(AUTH_PROXY_REFRESH_CONCURRENCY, |account| {
+            let provider = &provider;
+            let clock = &clock;
+            let store = &store;
+            let encryption_key = &encryption_key;
+            async move {
+                let oauth =
+                    OAuthRepository::for_auth_proxy_account(store, encryption_key, &account.id);
+                let service = OAuthRefreshService::new(&oauth, provider, clock);
+                if let Err(error) = service.refresh(Some(now_ms)).await {
+                    log_api_failure("scheduled_auth_proxy_oauth_refresh", &error);
+                }
+            }
+        })
+        .await;
 }
 
 async fn monitor_usage(

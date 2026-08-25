@@ -108,8 +108,7 @@ fn json_error_response<T: Serialize + ?Sized>(
         headers.set(name, value)?;
     }
     if let Some(request_id) = canonical_request_id {
-        // Anthropic clients inspect both spellings. Preserve the old precedence
-        // while making the chosen identifier unambiguous on the response.
+        // Anthropic clients inspect both spellings; emit the canonical value as both.
         headers.set("Request-Id", request_id)?;
         headers.set("X-Request-Id", request_id)?;
     }

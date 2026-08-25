@@ -70,9 +70,11 @@ Host 与 `AUTH_PROXY_HOST` 匹配的 `/backend-api` 路径族使用 `CHATGPT_REL
 保留请求方法、路径、Query、流式正文和端到端 header，并直接返回上游 HTTP、SSE 或 WebSocket
 响应。该路由独立于公开 API Key 鉴权和协议转换。
 
-管理端维护包含名称、`account_id` 和启用状态的代理账户。请求中的 `ChatGPT-Account-ID` 精确匹配
-一条已启用记录时，请求中已有的 `Authorization` 和 `ChatGPT-Account-ID` 使用当前 Codex OAuth
-凭据替换；记录已停用、未匹配或未配置时按原认证信息转发。
+管理端维护代理账户的名称、`account_id`、启用状态和独立 OAuth。请求中的
+`ChatGPT-Account-ID` 精确匹配一条已启用记录时，Worker 优先使用该记录自己的有效 OAuth；
+该记录尚未登录、Token 已过期或凭据缺少账户 ID 时自动回退到主 Codex OAuth。
+两者都会替换请求中已有的 `Authorization` 和 `ChatGPT-Account-ID`。记录已停用或未匹配时按
+原认证信息转发。
 
 当 `/v1/models` 包含 `client_version` 查询参数时，Worker 保留 Codex CLI 模型目录格式，而
 不转换为 OpenAI model list。
@@ -214,7 +216,13 @@ React 管理端使用：
 | `POST /auth-proxy` | 创建代理账户 |
 | `PUT /auth-proxy` | 更新代理账户的名称、`account_id` 或启用状态 |
 | `DELETE /auth-proxy` | 删除代理账户 |
+| `POST /auth-proxy/oauth/device` | 为指定代理账户创建设备授权请求 |
+| `POST /auth-proxy/oauth/device/poll` | 轮询指定代理账户的设备授权结果 |
+| `DELETE /auth-proxy/oauth` | 删除指定代理账户的独立 OAuth 凭据 |
 
 `/state`、`/subscription`、OAuth、API Key 和 Backend API 代理端点需要有效的管理会话；登录、退出
 以及所有受保护的管理写请求必须通过同源 `Origin` 校验。管理会话和凭据约束见
 [安全模型](security.md)。
+
+Worker 在创建 API Key 和代理账户时分配 UUID 格式的 `id`。更新、删除和代理账户 OAuth 请求
+使用该 `id` 定位记录。

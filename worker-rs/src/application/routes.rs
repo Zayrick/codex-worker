@@ -138,6 +138,9 @@ pub enum AdminRoute {
     AuthProxyCreate,
     AuthProxyUpdate,
     AuthProxyDelete,
+    AuthProxyOAuthStart,
+    AuthProxyOAuthPoll,
+    AuthProxyOAuthDelete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +181,9 @@ pub fn match_admin_route(
         ("POST", "auth-proxy") => AdminRoute::AuthProxyCreate,
         ("PUT", "auth-proxy") => AdminRoute::AuthProxyUpdate,
         ("DELETE", "auth-proxy") => AdminRoute::AuthProxyDelete,
+        ("POST", "auth-proxy/oauth/device") => AdminRoute::AuthProxyOAuthStart,
+        ("POST", "auth-proxy/oauth/device/poll") => AdminRoute::AuthProxyOAuthPoll,
+        ("DELETE", "auth-proxy/oauth") => AdminRoute::AuthProxyOAuthDelete,
         _ => return None,
     };
     Some(MatchedAdminRoute { base_path, route })
@@ -252,6 +258,39 @@ mod tests {
                 base_path: "/secret/admin".into(),
                 route: AdminRoute::AuthProxyDelete,
             })
+        );
+        assert_eq!(
+            match_admin_route("POST", "/secret/admin/auth-proxy/oauth/device", "secret"),
+            Some(MatchedAdminRoute {
+                base_path: "/secret/admin".into(),
+                route: AdminRoute::AuthProxyOAuthStart,
+            })
+        );
+        assert_eq!(
+            match_admin_route(
+                "POST",
+                "/secret/admin/auth-proxy/oauth/device/poll",
+                "secret",
+            ),
+            Some(MatchedAdminRoute {
+                base_path: "/secret/admin".into(),
+                route: AdminRoute::AuthProxyOAuthPoll,
+            })
+        );
+        assert_eq!(
+            match_admin_route("DELETE", "/secret/admin/auth-proxy/oauth", "secret"),
+            Some(MatchedAdminRoute {
+                base_path: "/secret/admin".into(),
+                route: AdminRoute::AuthProxyOAuthDelete,
+            })
+        );
+        assert_eq!(
+            match_admin_route("GET", "/secret/admin/auth-proxy/oauth", "secret"),
+            None
+        );
+        assert_eq!(
+            match_admin_route("POST", "/secret/admin/auth-proxy/oauth/device/", "secret"),
+            None
         );
     }
 }

@@ -29,7 +29,7 @@ Admin browser ──────────→│ Rust/Wasm backend            
 
 | 组件 | 职责 |
 | --- | --- |
-| React 管理端 | 管理会话登录、OAuth 设备授权、订阅额度展示、API Key 与代理账户许可管理 |
+| React 管理端 | 管理会话登录、主/代理 OAuth 设备授权、订阅额度展示、API Key 与代理账户许可管理 |
 | Rust/Wasm Worker | 路由、鉴权、协议转换、上游访问、流式传输和定时维护 |
 | `AUTH_KV` | 保存加密后的 OAuth 凭据、下游 API Key、Backend API 代理账户和 Codex 用量状态 |
 | Static Assets | 保存 Vite 构建的管理端资源；HTML 仅由隐藏管理路径读取 |
@@ -111,8 +111,8 @@ WebSocket 只处理客户端发往上游的 `response.create` 和 `response.appe
 request → account_id policy → credential selection → trusted relay
 ```
 
-该流程保持路径、Query、端到端 header 和流式正文，并按已启用的代理账户选择原请求凭据或已保存
-的 Codex OAuth 凭据。
+该流程保持路径、Query、端到端 header 和流式正文。未匹配或停用的代理账户保留原请求凭据；
+匹配记录优先选择独立 OAuth，独立凭据不可用时选择主 OAuth。
 
 ### 5.3 管理请求
 
@@ -143,18 +143,19 @@ Codex 额度窗口的额度剩余百分比、剩余毫秒数和剩余时间百�
   `上次剩余额度 × 实际采样间隔 ÷ 上次剩余时间`；本轮实际消耗严格大于该均匀消耗额度时再次
   推送。Cron 延迟或漏跑时使用实际采样间隔，而不是固定假定为 5 分钟。
 
-同一轮随后直接读取 KV 中 `oauth` 记录的 `expiresAt`。仅当 access token 将在三小时内过期时
-才调用 OpenAI token endpoint；普通 API 请求不会发起刷新，避免多个边缘位置同时使用旋转式
-refresh token。
+同一轮随后直接读取 KV 中主 `oauth` 和每个代理 UUID 对应 OAuth 记录的 `expiresAt`。仅当
+access token 将在三小时内过期时才调用 OpenAI token endpoint；代理凭据使用有限并发分别刷新。
+普通 API 请求不会发起刷新，避免多个边缘位置同时使用旋转式 refresh token。
 
 ## 6. 持久化与状态
 
-`AUTH_KV` 使用三个固定键：
+`AUTH_KV` 使用固定键与按代理 UUID 派生的动态键族：
 
 | KV key | 内容 | 保护方式 |
 | --- | --- | --- |
 | `oauth` | access token、refresh token、账户信息和过期时间 | AES-256-GCM envelope |
-| `API_KEYS` | 下游 API Key 数组，以及 Backend API 代理账户的名称、`account_id` 和启用状态 | AES-256-GCM envelope |
+| `oauth:auth-proxy:<uuid>` | 单个代理账户的独立 access token、refresh token、账户信息和过期时间 | 按 UUID 绑定 purpose 的 AES-256-GCM envelope |
+| `API_KEYS` | 下游 API Key 和 Backend API 代理账户及其记录 ID | AES-256-GCM envelope |
 | `CODEX_USAGE` | 最近一次用量快照、剩余时间和告警状态 | AES-256-GCM envelope |
 
 设备授权 state 和管理会话不写入 KV，而是使用独立 purpose 加密后交由客户端保存。所有 envelope
@@ -163,6 +164,9 @@ refresh token。
 KV 适合本项目的低频写入和高频读取，但其读取最终一致。API Key 集合以单条记录读改写，管理面
 因此按低频、单管理员场景设计，不提供事务或并发编辑保证。相关安全影响见
 [安全模型](security.md)。
+
+API Key 与代理账户使用后端分配的 UUID 定位。缺少 `id` 的 `API_KEYS` 记录会在读取时补齐并
+写回。
 
 ## 7. 传输原则
 

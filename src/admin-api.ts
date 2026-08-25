@@ -40,16 +40,25 @@ export interface SubscriptionInfo extends SubscriptionMetadata {
 	fetchedAt: number;
 }
 
-export interface ClientApiKey {
+export interface ClientApiKeyInput {
 	name: string;
 	key: string;
 	enabled: boolean;
 }
 
-export interface AuthProxyAccount {
+export interface ClientApiKey extends ClientApiKeyInput {
+	id: string;
+}
+
+export interface AuthProxyAccountInput {
 	name: string;
 	accountId: string;
 	enabled: boolean;
+}
+
+export interface AuthProxyAccount extends AuthProxyAccountInput {
+	id: string;
+	oauth: OAuthStatus | null;
 }
 
 export interface AdminState {
@@ -74,6 +83,10 @@ export type DevicePollResult =
 			oauth: OAuthStatus;
 			subscription: SubscriptionMetadata;
 	  };
+
+export type AuthProxyDevicePollResult =
+	| { status: "pending"; retryAfter: number }
+	| { status: "stored"; oauth: OAuthStatus };
 
 export class AdminApiError extends Error {
 	readonly status: number;
@@ -152,7 +165,7 @@ export class AdminApiClient {
 		);
 	}
 
-	createApiKey(value: ClientApiKey): Promise<ClientApiKey[]> {
+	createApiKey(value: ClientApiKeyInput): Promise<ClientApiKey[]> {
 		return this.requestJson(
 			"/api-keys",
 			jsonRequest("POST", value),
@@ -161,25 +174,25 @@ export class AdminApiClient {
 	}
 
 	updateApiKey(
-		originalName: string,
-		value: ClientApiKey,
+		id: string,
+		value: ClientApiKeyInput,
 	): Promise<ClientApiKey[]> {
 		return this.requestJson(
 			"/api-keys",
-			jsonRequest("PUT", { originalName, ...value }),
+			jsonRequest("PUT", { id, ...value }),
 			(value) => parseApiKeysEnvelope(value).apiKeys,
 		);
 	}
 
-	deleteApiKey(name: string): Promise<ClientApiKey[]> {
+	deleteApiKey(id: string): Promise<ClientApiKey[]> {
 		return this.requestJson(
 			"/api-keys",
-			jsonRequest("DELETE", { name }),
+			jsonRequest("DELETE", { id }),
 			(value) => parseApiKeysEnvelope(value).apiKeys,
 		);
 	}
 
-	createAuthProxyAccount(value: AuthProxyAccount): Promise<AuthProxyAccount[]> {
+	createAuthProxyAccount(value: AuthProxyAccountInput): Promise<AuthProxyAccount[]> {
 		return this.requestJson(
 			"/auth-proxy",
 			jsonRequest("POST", value),
@@ -188,21 +201,48 @@ export class AdminApiClient {
 	}
 
 	updateAuthProxyAccount(
-		originalName: string,
-		value: AuthProxyAccount,
+		id: string,
+		value: AuthProxyAccountInput,
 	): Promise<AuthProxyAccount[]> {
 		return this.requestJson(
 			"/auth-proxy",
-			jsonRequest("PUT", { originalName, ...value }),
+			jsonRequest("PUT", { id, ...value }),
 			(value) => parseAuthProxyAccountsEnvelope(value).authProxyAccounts,
 		);
 	}
 
-	deleteAuthProxyAccount(name: string): Promise<AuthProxyAccount[]> {
+	deleteAuthProxyAccount(id: string): Promise<AuthProxyAccount[]> {
 		return this.requestJson(
 			"/auth-proxy",
-			jsonRequest("DELETE", { name }),
+			jsonRequest("DELETE", { id }),
 			(value) => parseAuthProxyAccountsEnvelope(value).authProxyAccounts,
+		);
+	}
+
+	startAuthProxyDeviceAuthorization(id: string): Promise<DeviceAuthorization> {
+		return this.requestJson(
+			"/auth-proxy/oauth/device",
+			jsonRequest("POST", { id }),
+			parseDeviceAuthorization,
+		);
+	}
+
+	pollAuthProxyDeviceAuthorization(
+		id: string,
+		state: string,
+	): Promise<AuthProxyDevicePollResult> {
+		return this.requestJson(
+			"/auth-proxy/oauth/device/poll",
+			jsonRequest("POST", { id, state }),
+			parseAuthProxyDevicePollResult,
+		);
+	}
+
+	removeAuthProxyOAuth(id: string): Promise<null> {
+		return this.requestJson(
+			"/auth-proxy/oauth",
+			jsonRequest("DELETE", { id }),
+			parseRemovedOAuth,
 		);
 	}
 
@@ -367,6 +407,7 @@ function parseQuotaWindow(value: unknown): QuotaWindow {
 function parseClientApiKey(value: unknown): ClientApiKey {
 	if (!isRecord(value)) throw invalidPayload();
 	return {
+		id: requiredString(value.id),
 		name: requiredString(value.name),
 		key: requiredString(value.key),
 		enabled: requiredBoolean(value.enabled),
@@ -395,9 +436,11 @@ function parseAuthProxyAccounts(value: unknown): AuthProxyAccount[] {
 function parseAuthProxyAccount(value: unknown): AuthProxyAccount {
 	if (!isRecord(value)) throw invalidPayload();
 	return {
+		id: requiredString(value.id),
 		name: requiredString(value.name),
 		accountId: requiredString(value.accountId),
 		enabled: requiredBoolean(value.enabled),
+		oauth: value.oauth === null ? null : parseOAuthStatus(value.oauth),
 	};
 }
 
@@ -425,6 +468,24 @@ function parseDevicePollResult(value: unknown): DevicePollResult {
 		};
 	}
 	throw invalidPayload();
+}
+
+function parseAuthProxyDevicePollResult(
+	value: unknown,
+): AuthProxyDevicePollResult {
+	if (!isRecord(value)) throw invalidPayload();
+	if (value.status === "pending") {
+		return { status: "pending", retryAfter: positiveNumber(value.retryAfter) };
+	}
+	if (value.status === "stored") {
+		return { status: "stored", oauth: parseOAuthStatus(value.oauth) };
+	}
+	throw invalidPayload();
+}
+
+function parseRemovedOAuth(value: unknown): null {
+	if (!isRecord(value) || value.oauth !== null) throw invalidPayload();
+	return null;
 }
 
 function isQuotaWindowKind(value: unknown): value is QuotaWindowKind {

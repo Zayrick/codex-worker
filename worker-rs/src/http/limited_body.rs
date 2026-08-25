@@ -34,10 +34,9 @@ pub struct LimitedBodyCollector {
 impl LimitedBodyCollector {
     /// Creates a collector and performs the cheap `Content-Length` preflight.
     ///
-    /// Parsing deliberately follows JavaScript's `Number.parseInt(value, 10)`
-    /// behavior used by the previous implementation: a decimal prefix is
-    /// accepted, malformed/non-finite values are ignored, and negative values
-    /// do not trigger the upper bound.
+    /// Parsing follows JavaScript's `Number.parseInt(value, 10)`: a decimal
+    /// prefix is accepted, malformed or non-finite values are ignored, and
+    /// negative values do not trigger the upper bound.
     pub fn new(
         max_bytes: usize,
         declared_content_length: Option<&str>,

@@ -30,9 +30,9 @@ pnpm install --frozen-lockfile
 | --- | --- | --- |
 | Worker entry | `worker-rs/build/index.js` | `worker-build` 生成的 Rust/Wasm 入口 |
 | Static Assets binding | `ASSETS` | React 管理端资源 |
-| KV binding | `AUTH_KV` | 加密的 OAuth、API Key、Backend API 代理设置与 Codex 用量状态 |
+| KV binding | `AUTH_KV` | 加密的主/代理 OAuth、API Key、Backend API 代理设置与 Codex 用量状态 |
 | Variable | `CORS_ORIGIN=*` | 公开 API 的单一 CORS origin |
-| Cron Trigger | `*/5 * * * *` | 每 5 分钟采集用量、执行 Bark 告警并检查 OAuth 刷新 |
+| Cron Trigger | `*/5 * * * *` | 每 5 分钟采集用量、执行 Bark 告警并检查主账户与代理账户 OAuth 刷新 |
 | Observability | enabled | 结构化 Worker 日志与 source map |
 
 `AUTH_KV` 未声明 namespace ID，因此 Wrangler 当前会使用

@@ -47,6 +47,7 @@ pub struct DeviceAuthorizationService<'a> {
     provider: &'a OAuthProvider<'a>,
     clock: &'a dyn OAuthClock,
     master_key: &'a str,
+    state_purpose: String,
 }
 
 impl<'a> DeviceAuthorizationService<'a> {
@@ -61,6 +62,23 @@ impl<'a> DeviceAuthorizationService<'a> {
             provider,
             clock,
             master_key,
+            state_purpose: DEVICE_STATE_PURPOSE.into(),
+        }
+    }
+
+    pub fn scoped(
+        credentials: &'a dyn OAuthCredentialsStore,
+        provider: &'a OAuthProvider<'a>,
+        clock: &'a dyn OAuthClock,
+        master_key: &'a str,
+        record_id: &str,
+    ) -> Self {
+        Self {
+            credentials,
+            provider,
+            clock,
+            master_key,
+            state_purpose: format!("{DEVICE_STATE_PURPOSE}/auth-proxy/{record_id}"),
         }
     }
 
@@ -78,7 +96,7 @@ impl<'a> DeviceAuthorizationService<'a> {
         };
         let state = serde_json::to_value(state)
             .ok()
-            .and_then(|value| seal_json(&value, self.master_key, DEVICE_STATE_PURPOSE).ok())
+            .and_then(|value| seal_json(&value, self.master_key, &self.state_purpose).ok())
             .ok_or_else(device_session_unavailable)?;
 
         Ok(DeviceAuthorization {
@@ -92,7 +110,7 @@ impl<'a> DeviceAuthorizationService<'a> {
 
     pub async fn poll(&self, sealed_state: &str) -> AppResult<DevicePollResult> {
         self.credentials.require_unconfigured().await?;
-        let state = device_state(sealed_state, self.master_key)?;
+        let state = device_state(sealed_state, self.master_key, &self.state_purpose)?;
         if state.expires_at <= self.clock.now_ms().await {
             return Err(
                 ApiError::new(410, "The device authorization session has expired.")
@@ -123,9 +141,8 @@ impl<'a> DeviceAuthorizationService<'a> {
     }
 }
 
-fn device_state(sealed_state: &str, master_key: &str) -> AppResult<DeviceState> {
-    let value = open_json(sealed_state, master_key, DEVICE_STATE_PURPOSE)
-        .map_err(|_| invalid_device_state())?;
+fn device_state(sealed_state: &str, master_key: &str, purpose: &str) -> AppResult<DeviceState> {
+    let value = open_json(sealed_state, master_key, purpose).map_err(|_| invalid_device_state())?;
     let state: DeviceState = serde_json::from_value(value).map_err(|_| invalid_device_state())?;
     if state.version != 1
         || state.device_auth_id.is_empty()
