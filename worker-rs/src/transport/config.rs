@@ -38,6 +38,14 @@ impl WorkerConfig {
         required_string(env, "BARK_PUSH_URL")
     }
 
+    pub fn dingtalk_webhook_url(env: &Env) -> AppResult<String> {
+        required_string(env, "DINGTALK_WEBHOOK_URL")
+    }
+
+    pub fn dingtalk_secret(env: &Env) -> AppResult<String> {
+        required_string(env, "DINGTALK_SECRET")
+    }
+
     pub fn require_relay_origin(&self) -> AppResult<&str> {
         self.relay_origin
             .as_deref()

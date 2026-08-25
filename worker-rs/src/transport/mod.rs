@@ -8,6 +8,7 @@ mod bark;
 mod body;
 mod codex;
 mod config;
+mod dingtalk;
 mod oauth;
 mod provider_error;
 mod response;

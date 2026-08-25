@@ -15,6 +15,7 @@ use super::{
     bark::BarkClient,
     codex::CodexClient,
     config::WorkerConfig,
+    dingtalk::DingTalkClient,
     oauth::{CloudflareClock, CloudflareOAuthHttpClient},
     store::CloudflareSecretStore,
     usage_store::CodexUsageStateRepository,
@@ -89,15 +90,23 @@ async fn monitor_usage(
     let evaluation = evaluate_codex_usage(previous.as_ref(), &subscription, now_ms);
 
     if let Some(notification) = evaluation.notification() {
-        let delivery = match WorkerConfig::bark_push_url(env) {
-            Ok(endpoint) => match BarkClient::new(&endpoint) {
-                Ok(client) => client.send(&notification).await,
-                Err(error) => Err(error),
-            },
-            Err(error) => Err(error),
+        let bark = async {
+            let endpoint = WorkerConfig::bark_push_url(env)?;
+            BarkClient::new(&endpoint)?.send(&notification).await
         };
-        if let Err(error) = delivery {
+        let dingtalk = async {
+            let webhook = WorkerConfig::dingtalk_webhook_url(env)?;
+            let secret = WorkerConfig::dingtalk_secret(env)?;
+            DingTalkClient::new(webhook, secret)
+                .send(&notification, now_ms)
+                .await
+        };
+        let (bark_delivery, dingtalk_delivery) = futures_util::join!(bark, dingtalk);
+        if let Err(error) = bark_delivery {
             log_api_failure("scheduled_bark_push", &error);
+        }
+        if let Err(error) = dingtalk_delivery {
+            log_api_failure("scheduled_dingtalk_push", &error);
         }
     }
 

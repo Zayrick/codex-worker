@@ -23,12 +23,15 @@ relay 主机及 OpenAI 账户的安全由部署者负责。
 | `ADMIN_SECRET` | 验证管理登录，并参与会话绑定 | 所有现有管理会话失效 |
 | `AUTH_PROXY_HOST` | 指定整站镜像代理的入站 Host | 后续请求按新 Host 分流 |
 | `BARK_PUSH_URL` | 指定包含设备 key 的 Bark HTTPS 推送端点 | 后续用量提醒切换到新设备或服务 |
+| `DINGTALK_SECRET` | 为钉钉机器人请求生成 HMAC-SHA256 签名 | 旧密钥生成的后续请求不再通过验证 |
+| `DINGTALK_WEBHOOK_URL` | 指定包含 access token 的钉钉机器人 HTTPS Webhook | 后续用量提醒切换到新机器人 |
 | `CHATGPT_RELAY_URL` | 指定受信任上游 relay | 后续流量切换到新信任主体 |
 | `DATA_ENCRYPTION_KEY` | 加密持久化凭据、用量、设备 state 与管理会话 | 现有加密数据和会话无法读取 |
 
-`ADMIN_PATH` 是纵深防御措施，不是认证因子。`BARK_PUSH_URL` 的路径包含设备 key，必须按凭据
-保护。`DATA_ENCRYPTION_KEY` 必须是 32 个随机字节的无填充 base64url 编码，并与其他 secret
-独立生成。
+`ADMIN_PATH` 是纵深防御措施，不是认证因子。`BARK_PUSH_URL` 的路径包含设备 key，
+`DINGTALK_WEBHOOK_URL` 的查询参数包含 access token，两者都必须按凭据保护。`DINGTALK_SECRET`
+必须与其他 secret 独立保存。`DATA_ENCRYPTION_KEY` 必须是 32 个随机字节的无填充 base64url
+编码，并与其他 secret 独立生成。
 
 secret 只应存放于 Cloudflare secret、开发机 `.dev.vars` 或一次性部署使用的
 `.env.production`。不得写入 `wrangler.jsonc` 的 `vars`、源码、测试 fixture、日志、Issue 或
@@ -119,6 +122,12 @@ fragment 和尾部斜杠的精确 HTTPS 端点；Worker 对 Bark 响应使用手
 key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受该服务能够看到上述用量元数据；
 否则应使用受信任的自托管 Bark 服务。
 
+钉钉推送使用相同范围的用量元数据，不包含 OAuth、账户 ID、邮箱、API Key 或模型请求内容。
+`DINGTALK_WEBHOOK_URL` 仅接受钉钉官方 `oapi.dingtalk.com` 的精确 HTTPS 机器人发送路径和唯一的
+`access_token` 参数；Worker 使用 `DINGTALK_SECRET` 与当前毫秒时间戳生成 HMAC-SHA256 签名，
+将签名和时间戳追加到请求 URL，并使用手动重定向策略。钉钉响应以 64 KiB 为上限读取，只有
+HTTP 2xx 且 JSON `errcode` 为 `0` 才视为成功。
+
 ### 镜像代理与 Backend API 凭据替换
 
 `AUTH_PROXY_HOST` 上的所有请求都将端到端 header 和正文发送到 `CHATGPT_RELAY_URL`，因此该
@@ -136,7 +145,7 @@ Workers KV 是最终一致存储。本项目对 OAuth 和 API Key 常规读取�
 - 删除 OAuth 不保证所有边缘位置立即停止看到旧记录；
 - 代理账户独立登录或退出后，其他边缘位置可能短暂继续使用主凭据回退或旧代理凭据；
 - `API_KEYS` 的并发读改写可能发生最后写入者覆盖；
-- `CODEX_USAGE` 的连续快照可能短暂读取到上一轮状态，从而延迟或重复一次 Bark 提醒；
+- `CODEX_USAGE` 的连续快照可能短暂读取到上一轮状态，从而延迟或重复一次 Bark 与钉钉提醒；
 - 该管理面适用于低频、单管理员操作，不提供事务保证。
 
 当前平台语义见 [Workers KV consistency](https://developers.cloudflare.com/kv/concepts/how-kv-works/)
@@ -169,6 +178,7 @@ Worker 日志只应包含固定事件名、状态和安全错误 code。禁止�
 - OAuth token、refresh token 或账户凭据；
 - 下游 API Key 或管理密钥；
 - Bark 设备 URL 或设备 key；
+- 钉钉 Webhook、access token 或加签密钥；
 - 管理 Cookie、设备 state、IV 或密文；
 - `.dev.vars`、`.env.production` 或 Cloudflare/GitHub 部署凭据。
 

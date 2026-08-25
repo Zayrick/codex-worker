@@ -21,7 +21,8 @@
 
 - 使用 pnpm 11、Node.js >=22、Rust >=1.97、`wasm32-unknown-unknown` 和 `worker-build` 0.8.5。
 - 固定绑定为 `ASSETS`、`AUTH_KV`；固定 secrets 为 `ADMIN_PATH`、`ADMIN_SECRET`、
-  `AUTH_PROXY_HOST`、`BARK_PUSH_URL`、`CHATGPT_RELAY_URL`、`DATA_ENCRYPTION_KEY`；非 secret 为
+  `AUTH_PROXY_HOST`、`BARK_PUSH_URL`、`DINGTALK_SECRET`、`DINGTALK_WEBHOOK_URL`、
+  `CHATGPT_RELAY_URL`、`DATA_ENCRYPTION_KEY`；非 secret 为
   `CORS_ORIGIN`；Cron 每 5 分钟执行。
 - 涉及 Workers、KV、Wrangler 配置或平台限制时，先查当前 Cloudflare 官方文档。
 - 不编辑或提交 `worker-rs/build/`、`worker-rs/target/`、`dist/`、`.wrangler/`、`.dev.vars`、

@@ -14,7 +14,7 @@ OpenAI、Anthropic 和 Gemini 风格的接口。
 - 通过管理界面完成 Codex 设备授权、订阅额度查看、下游 API Key、代理账户许可和代理账户独立登录管理；
 - 在配置的 Host 上镜像代理全部路径；`/backend-api/*` 按 `account_id` 选择独立代理 OAuth、主 OAuth 回退或原认证透传，其他路径保持原始凭据；
 - 使用 Workers KV 保存 OAuth 凭据、API Key 与 Codex 用量快照，并以 AES-256-GCM 加密；
-- 每 5 分钟采集 Codex 用量、分别刷新即将过期的主账户与代理账户 OAuth 凭据，并通过 Bark 提醒消耗进度变化和额度重置；
+- 每 5 分钟采集 Codex 用量、分别刷新即将过期的主账户与代理账户 OAuth 凭据，并通过 Bark 与钉钉机器人提醒消耗进度变化和额度重置；
 - 在公开的 `/status/usage` 页面展示 KV 用量快照；时间轴从最早的当前配额周期开始，按各窗口周期向未来一周推算；
 - 将 React 管理端与 Rust/Wasm Worker 构建为同一个 Cloudflare 部署单元。
 
@@ -29,6 +29,7 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
                                           │          ├─→ auth.openai.com
                                           │          ├─→ api.openai.com
                                           │          ├─→ Bark HTTPS endpoint
+                                          │          ├─→ DingTalk robot webhook
                                           │          └─→ trusted HTTPS relay ─→ chatgpt.com
                                           │
                                           └─ API Key / account policy
@@ -42,6 +43,10 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
 `https://api.day.app/<device-key>`。Worker 只向该端点发送额度窗口名称、剩余额度百分比、剩余时间百分比和额度状态，
 不会发送 OAuth、API Key、账户标识或模型请求内容。
 
+`DINGTALK_WEBHOOK_URL` 和 `DINGTALK_SECRET` 分别是钉钉自定义机器人的完整 Webhook 地址与
+安全设置中的加签密钥。Worker 按钉钉协议为每次请求生成时间戳和 HMAC-SHA256 签名，并发送与
+Bark 相同范围的用量提醒内容。
+
 ## 环境要求
 
 - Node.js 22 或更高版本；
@@ -52,6 +57,7 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
 - Cloudflare 账户，以及可完成 Codex 设备授权的 OpenAI 账户；
 - 一个受信任的 ChatGPT HTTPS relay。
 - 一个可接收通知的 Bark HTTPS 设备端点。
+- 一个启用“加签”安全设置的钉钉自定义机器人。
 
 ## 本地启动
 
@@ -76,6 +82,8 @@ ADMIN_PATH=<随机 URL 安全路径段>
 ADMIN_SECRET=<高强度管理密钥>
 AUTH_PROXY_HOST=proxy.example.com
 BARK_PUSH_URL=https://api.day.app/<device-key>
+DINGTALK_SECRET=SEC...
+DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=<access-token>
 CHATGPT_RELAY_URL=https://relay.example.com
 DATA_ENCRYPTION_KEY=<32 个随机字节的无填充 base64url 编码>
 ```
