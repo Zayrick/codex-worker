@@ -5,7 +5,7 @@ use crate::{
     core::AppResult,
     upstream::dingtalk::{
         DINGTALK_MAX_RESPONSE_BYTES, DINGTALK_REQUEST_TIMEOUT_MS, DingTalkResponse,
-        dingtalk_payload, dingtalk_unavailable, signed_dingtalk_webhook,
+        dingtalk_notification_payload, dingtalk_unavailable, signed_dingtalk_webhook,
     },
 };
 
@@ -27,9 +27,8 @@ impl DingTalkClient {
         headers
             .set("content-type", "application/json; charset=utf-8")
             .map_err(|_| dingtalk_unavailable())?;
-        let content = format!("{}\n{}", notification.title, notification.body);
-        let body = serde_json::to_string(&dingtalk_payload(&content))
-            .map_err(|_| dingtalk_unavailable())?;
+        let payload = dingtalk_notification_payload(&notification.title, &notification.body);
+        let body = serde_json::to_string(&payload).map_err(|_| dingtalk_unavailable())?;
         let mut init = RequestInit::new();
         init.with_method(Method::Post)
             .with_headers(headers)
