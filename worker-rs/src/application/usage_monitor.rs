@@ -63,6 +63,7 @@ pub struct UsageAlert {
     pub window_label: String,
     pub remaining_percent: Option<f64>,
     pub remaining_time_percent: Option<f64>,
+    pub previous_remaining_percent: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,14 +127,14 @@ pub fn evaluate_codex_usage(
                 .iter()
                 .find(|candidate| candidate.id == current.id)
         });
-        if matches!(
-            (
+        if current.kind != CodexQuotaWindowKind::FiveHour
+            && let (Some(previous_remaining), Some(current_remaining)) = (
                 prior.and_then(|prior| prior.remaining_percent),
-                current.remaining_percent
-            ),
-            (Some(previous), Some(current)) if current > previous
-        ) {
-            alerts.push(alert(current, UsageAlertKind::QuotaReset));
+                current.remaining_percent,
+            )
+            && current_remaining > previous_remaining
+        {
+            alerts.push(reset_alert(current, previous_remaining));
         }
         let Some(prior) = prior else {
             current.entry_alert_sent =
@@ -213,6 +214,17 @@ fn alert(window: &MonitoredQuotaWindow, kind: UsageAlertKind) -> UsageAlert {
         window_label: window_label(window),
         remaining_percent: window.remaining_percent,
         remaining_time_percent: window.remaining_time_percent,
+        previous_remaining_percent: None,
+    }
+}
+
+fn reset_alert(window: &MonitoredQuotaWindow, previous_remaining_percent: f64) -> UsageAlert {
+    UsageAlert {
+        kind: UsageAlertKind::QuotaReset,
+        window_label: window_label(window),
+        remaining_percent: window.remaining_percent,
+        remaining_time_percent: window.remaining_time_percent,
+        previous_remaining_percent: Some(previous_remaining_percent),
     }
 }
 
@@ -322,6 +334,10 @@ fn alert_line(alert: &UsageAlert) -> String {
         .remaining_time_percent
         .map(|value| format!("{value:.1}%"))
         .unwrap_or_else(|| "未知".into());
+    let previous_remaining = alert
+        .previous_remaining_percent
+        .map(|value| format!("{value:.1}%"))
+        .unwrap_or_else(|| "未知".into());
     match alert.kind {
         UsageAlertKind::ConsumptionTooFast => format!(
             "{}：剩余额度 {remaining}，低于剩余时间 {remaining_time}，当前消耗进度偏快。",
@@ -332,7 +348,7 @@ fn alert_line(alert: &UsageAlert) -> String {
             alert.window_label,
         ),
         UsageAlertKind::QuotaReset => format!(
-            "{}：检测到剩余额度增加，额度已重置，当前剩余 {remaining}。",
+            "{}：检测到剩余额度增加，额度已重置，重置前额度剩余 {previous_remaining}。",
             alert.window_label
         ),
     }
@@ -361,6 +377,11 @@ mod tests {
         sampled_at: i64,
     ) -> CodexSubscriptionInfo {
         let reset_after_ms = (window_seconds * remaining_time_percent / 100.0 * 1_000.0) as i64;
+        let kind = if window_seconds == 5.0 * 60.0 * 60.0 {
+            CodexQuotaWindowKind::FiveHour
+        } else {
+            CodexQuotaWindowKind::Weekly
+        };
         CodexSubscriptionInfo {
             plan_type: Some("pro".into()),
             subscription_active_start: None,
@@ -369,7 +390,7 @@ mod tests {
                 id: "codex-weekly-0".into(),
                 category: CodexQuotaCategory::Codex,
                 name: "Codex".into(),
-                kind: CodexQuotaWindowKind::Weekly,
+                kind,
                 used_percent: Some(100.0 - remaining_percent),
                 remaining_percent: Some(remaining_percent),
                 limit_window_seconds: Some(window_seconds),
@@ -424,10 +445,7 @@ mod tests {
                 .iter()
                 .map(|alert| alert.kind)
                 .collect::<Vec<_>>(),
-            vec![
-                UsageAlertKind::QuotaReset,
-                UsageAlertKind::ConsumptionRecovered
-            ]
+            vec![UsageAlertKind::ConsumptionRecovered]
         );
         assert!(
             recovered
@@ -445,7 +463,26 @@ mod tests {
     }
 
     #[test]
-    fn any_increase_in_remaining_quota_reports_a_reset() {
+    fn weekly_increase_in_remaining_quota_reports_the_previous_value() {
+        let weekly = 7.0 * 24.0 * 60.0 * 60.0;
+        let previous =
+            evaluate_codex_usage(None, &subscription(40.0, 50.0, weekly, NOW_MS), NOW_MS);
+        let reset = evaluate_codex_usage(
+            Some(&previous.state),
+            &subscription(40.1, 49.0, weekly, NOW_MS + FIVE_MINUTES_MS),
+            NOW_MS + FIVE_MINUTES_MS,
+        );
+        assert_eq!(reset.alerts.len(), 1);
+        assert_eq!(reset.alerts[0].kind, UsageAlertKind::QuotaReset);
+        assert_eq!(reset.alerts[0].previous_remaining_percent, Some(40.0));
+        assert_eq!(
+            reset.notification().unwrap().body,
+            "Codex · 7 天：检测到剩余额度增加，额度已重置，重置前额度剩余 40.0%。"
+        );
+    }
+
+    #[test]
+    fn five_hour_increase_does_not_report_a_reset() {
         let five_hours = 5.0 * 60.0 * 60.0;
         let previous =
             evaluate_codex_usage(None, &subscription(40.0, 50.0, five_hours, NOW_MS), NOW_MS);
@@ -454,8 +491,7 @@ mod tests {
             &subscription(40.1, 49.0, five_hours, NOW_MS + FIVE_MINUTES_MS),
             NOW_MS + FIVE_MINUTES_MS,
         );
-        assert_eq!(reset.alerts.len(), 1);
-        assert_eq!(reset.alerts[0].kind, UsageAlertKind::QuotaReset);
+        assert!(reset.alerts.is_empty());
     }
 
     #[test]
