@@ -132,7 +132,11 @@ function StatusUsage() {
 									</div>
 								</div>
 								{nowLeft !== null ? (
-									<span className="timeline-now-overlay" aria-hidden="true">
+									<span
+										className="timeline-now-overlay"
+										aria-hidden="true"
+										style={{ gridRow: `2 / span ${snapshot.windows.length}` }}
+									>
 										<i style={{ left: `${nowLeft}%` }} />
 									</span>
 								) : null}
@@ -216,8 +220,22 @@ function quotaSpan(windows: UsageWindow[], now: number): { start: number; end: n
 			? [resetAt - period]
 			: [];
 	});
-	const start = starts.length > 0 ? Math.min(...starts) : now;
-	return { start, end: Math.max(start + 7 * DAY_MS, now + 7 * DAY_MS) };
+	const firstCycleStart = starts.length > 0 ? Math.min(...starts) : now;
+	const start = startOfLocalDay(firstCycleStart);
+	const end = startOfNextLocalDay(Math.max(firstCycleStart + 7 * DAY_MS, now + 7 * DAY_MS));
+	return { start, end };
+}
+
+function startOfLocalDay(value: number): number {
+	const date = new Date(value);
+	date.setHours(0, 0, 0, 0);
+	return date.getTime();
+}
+
+function startOfNextLocalDay(value: number): number {
+	const date = new Date(value);
+	date.setHours(24, 0, 0, 0);
+	return date.getTime();
 }
 
 function dayTicks(start: number, end: number) {

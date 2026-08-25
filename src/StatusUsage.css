@@ -73,18 +73,20 @@
 }
 
 .timeline-scroll {
-	overflow-x: auto;
+	overflow: hidden;
 }
 
 .timeline-grid {
 	position: relative;
-	min-width: 980px;
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
 }
 
 .timeline-axis,
 .quota-lane {
 	display: grid;
-	grid-template-columns: 220px minmax(760px, 1fr);
+	grid-column: 1 / -1;
+	grid-template-columns: subgrid;
 }
 
 .timeline-axis {
@@ -217,8 +219,9 @@
 .timeline-now-overlay {
 	position: absolute;
 	z-index: 5;
-	top: 55px;
-	left: 220px;
+	grid-column: 2;
+	top: 0;
+	left: 0;
 	right: 0;
 	bottom: 0;
 	pointer-events: none;
@@ -339,11 +342,11 @@
 
 @media (max-width: 720px) {
 	.usage-page { padding: 24px 12px; }
-	.timeline-grid { min-width: 900px; }
-	.timeline-axis,
-	.quota-lane { grid-template-columns: 180px minmax(720px, 1fr); }
-	.timeline-now-overlay { left: 180px; }
 	.timeline-card { border-radius: 14px; }
+	.axis-day span { display: none; }
+	.axis-day b { font-size: 8px; }
+	.lane-heading { padding-inline: 10px; }
+	.lane-heading strong { max-width: 120px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
