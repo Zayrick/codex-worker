@@ -2,6 +2,7 @@
 
 mod admin;
 mod api;
+mod application_page;
 mod auth_proxy;
 mod bark;
 mod body;
@@ -12,6 +13,7 @@ mod provider_error;
 mod response;
 mod router;
 mod scheduled;
+mod status;
 mod store;
 mod stream;
 mod usage_store;

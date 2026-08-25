@@ -15,6 +15,7 @@ OpenAI、Anthropic 和 Gemini 风格的接口。
 - 在配置的 Host 上代理 `/backend-api/*`，按 `account_id` 选择独立代理 OAuth、主 OAuth 回退或原认证透传；
 - 使用 Workers KV 保存 OAuth 凭据、API Key 与 Codex 用量快照，并以 AES-256-GCM 加密；
 - 每 5 分钟采集 Codex 用量、分别刷新即将过期的主账户与代理账户 OAuth 凭据，并通过 Bark 提醒异常消耗速度；
+- 在公开的 `/status/usage` 页面展示 KV 用量快照；时间轴从最早的当前配额周期开始，按各窗口周期向未来一周推算；
 - 将 React 管理端与 Rust/Wasm Worker 构建为同一个 Cloudflare 部署单元。
 
 ## 系统组成
@@ -97,6 +98,15 @@ pnpm dev
 ```text
 http://localhost:8787/<ADMIN_PATH>/admin
 ```
+
+无需登录的用量状态页为：
+
+```text
+http://localhost:8787/status/usage
+```
+
+本地开发时可访问 `http://localhost:8787/status/usage?mock=1` 预览不写入 KV 的模拟配额时间轴；
+该模式只在 Vite 开发环境生效。
 
 首次进入管理界面后，依次完成管理密钥登录、Codex 设备授权和下游 API Key 创建。随后可验证
 公开 API：

@@ -91,6 +91,11 @@ API Key 在 KV 中是可恢复的加密值，以便管理端显示和编辑；�
 每次返回管理 HTML 时，Worker 生成新的 CSP nonce。页面同时设置禁止 framing、限制资源来源、
 禁用摄像头/麦克风/定位、`nosniff` 和 `no-store` 等安全 header。
 
+`/status/usage` 是有意公开的非隐藏页面，使用相同的 CSP、禁止 framing、权限限制和 `no-store`
+响应策略。其数据接口只公开采样时间、订阅类型、窗口名称/类别/周期、用量百分比与重置时间；
+不公开 OAuth、账户 ID、邮箱、API Key、Cookie、管理配置或告警投递状态。部署者应将这些用量
+与订阅元数据视为公开信息；需要私有状态页时必须在 Worker 前增加独立的访问控制。
+
 ## 6. 上游请求隔离
 
 普通公开 API 发送上游请求前，Worker 删除或重建以下类型的 header：

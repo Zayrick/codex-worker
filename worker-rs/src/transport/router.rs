@@ -1,7 +1,7 @@
 use worker::{Context, Date, Env, Request, Response};
 
 use crate::{
-    application::{is_known_api_path, match_admin_route, match_api_route},
+    application::{is_known_api_path, match_admin_route, match_api_route, match_status_route},
     auth::{ApiKeyRepository, OAuthRepository, client_token},
     upstream::auth_proxy::matches_auth_proxy_request,
 };
@@ -12,6 +12,7 @@ use super::{
     auth_proxy::handle_auth_proxy,
     config::WorkerConfig,
     response::{empty, with_cors},
+    status::handle_status,
     store::CloudflareSecretStore,
 };
 
@@ -38,6 +39,10 @@ pub async fn handle_fetch(
             Ok(_) => empty(204),
             Err(error) => health_failure(&error),
         };
+    }
+
+    if let Some(route) = match_status_route(&method, url.path()) {
+        return handle_status(route, &request, &env).await;
     }
 
     if let Some(admin_path) = WorkerConfig::admin_path(&env)

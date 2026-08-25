@@ -1,8 +1,7 @@
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use serde::Serialize;
 use serde_json::{Value, json};
-use worker::{AbortSignal, Date, Env, Headers, Method, Request, RequestInit, Response};
+use worker::{AbortSignal, Date, Env, Headers, Request, Response};
 
 use crate::{
     application::{AdminRoute, MatchedAdminRoute},
@@ -17,6 +16,7 @@ use crate::{
 };
 
 use super::{
+    application_page::application_page,
     body::read_limited_body,
     codex::CodexClient,
     config::WorkerConfig,
@@ -26,7 +26,6 @@ use super::{
 };
 
 const MAX_ADMIN_BODY_BYTES: usize = 16 * 1024;
-const CSP_NONCE_PLACEHOLDER: &str = "__CODEX_WORKER_CSP_NONCE__";
 const AUTH_PROXY_OAUTH_READ_CONCURRENCY: usize = 4;
 
 pub async fn handle_admin(
@@ -49,7 +48,7 @@ async fn dispatch(
 ) -> AppResult<Response> {
     let url = request.url().map_err(|_| invalid_admin_request())?;
     match matched.route {
-        AdminRoute::Page => return admin_application_page(request, env).await,
+        AdminRoute::Page => return application_page(request, env).await,
         AdminRoute::Login => {
             require_same_origin(request, &url)?;
             let admin_secret = WorkerConfig::admin_secret(env)?;
@@ -333,68 +332,6 @@ async fn admin_json(request: &mut Request) -> AppResult<JsonObject> {
         .ok_or_else(invalid_admin_json)
 }
 
-async fn admin_application_page(request: &Request, env: &Env) -> AppResult<Response> {
-    let assets = env.assets("ASSETS").map_err(|_| unavailable_admin_app())?;
-    let mut asset_url = request.url().map_err(|_| unavailable_admin_app())?;
-    asset_url.set_path("/index.html");
-    asset_url.set_query(None);
-    asset_url.set_fragment(None);
-    let headers = Headers::new();
-    headers
-        .set("accept", "text/html")
-        .map_err(|_| unavailable_admin_app())?;
-    let mut init = RequestInit::new();
-    init.with_method(Method::Get).with_headers(headers);
-    let mut asset = assets
-        .fetch(asset_url.as_str(), Some(init))
-        .await
-        .map_err(|_| unavailable_admin_app())?;
-    let content_type = asset
-        .headers()
-        .get("content-type")
-        .map_err(|_| unavailable_admin_app())?
-        .unwrap_or_default();
-    if !(200..300).contains(&asset.status_code())
-        || !content_type.to_ascii_lowercase().contains("text/html")
-    {
-        return Err(unavailable_admin_app());
-    }
-    let html = asset.text().await.map_err(|_| unavailable_admin_app())?;
-    let mut random = [0_u8; 16];
-    getrandom::fill(&mut random).map_err(|_| unavailable_admin_app())?;
-    let nonce = STANDARD.encode(random);
-    let html = html.replace(CSP_NONCE_PLACEHOLDER, &nonce);
-    let headers = Headers::new();
-    headers
-        .set("content-type", "text/html; charset=utf-8")
-        .map_err(|_| unavailable_admin_app())?;
-    for (name, value) in [
-        ("cache-control", "no-store".to_owned()),
-        (
-            "content-security-policy",
-            format!(
-                "default-src 'none'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'nonce-{nonce}'; connect-src 'self'; img-src 'self' data:; font-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-            ),
-        ),
-        ("cross-origin-opener-policy", "same-origin".to_owned()),
-        ("cross-origin-resource-policy", "same-origin".to_owned()),
-        (
-            "permissions-policy",
-            "camera=(), geolocation=(), microphone=()".to_owned(),
-        ),
-        ("referrer-policy", "same-origin".to_owned()),
-        ("x-content-type-options", "nosniff".to_owned()),
-        ("x-frame-options", "DENY".to_owned()),
-    ] {
-        headers
-            .set(name, &value)
-            .map_err(|_| unavailable_admin_app())?;
-    }
-    Ok(Response::builder()
-        .with_headers(headers)
-        .fixed(html.into_bytes()))
-}
-
 fn require_same_origin(request: &Request, url: &url::Url) -> AppResult<()> {
     let origin = request
         .headers()
@@ -465,10 +402,4 @@ fn invalid_admin_request() -> ApiError {
     ApiError::new(500, "The management request could not be completed.")
         .with_kind("internal_error")
         .with_code("admin_request_failed")
-}
-
-fn unavailable_admin_app() -> ApiError {
-    ApiError::new(500, "The management application is unavailable.")
-        .with_kind("configuration_error")
-        .with_code("admin_application_unavailable")
 }

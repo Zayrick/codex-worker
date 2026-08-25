@@ -29,10 +29,10 @@ Admin browser ──────────→│ Rust/Wasm backend            
 
 | 组件 | 职责 |
 | --- | --- |
-| React 管理端 | 管理会话登录、主/代理 OAuth 设备授权、订阅额度展示、API Key 与代理账户许可管理 |
+| React Web 应用 | 在隐藏管理路径提供管理界面，并在 `/status/usage` 提供公开用量时间轴 |
 | Rust/Wasm Worker | 路由、鉴权、协议转换、上游访问、流式传输和定时维护 |
 | `AUTH_KV` | 保存加密后的 OAuth 凭据、下游 API Key、Backend API 代理账户和 Codex 用量状态 |
-| Static Assets | 保存 Vite 构建的管理端资源；HTML 仅由隐藏管理路径读取 |
+| Static Assets | 保存 Vite 构建的 Web 资源；HTML 由精确匹配的隐藏管理路径或公开用量状态路径读取 |
 | ChatGPT relay | 代表 Worker 访问 `chatgpt.com` 的 Codex 与用量路径 |
 | OpenAI 直连端点 | 承载 OAuth 设备流、token 刷新和 Realtime sideband |
 | Bark endpoint | 接收用量百分比、剩余时间和消耗速度提醒 |
@@ -69,14 +69,16 @@ transport ──→ application ──→ protocol ──→ core
 
 ## 4. 前端边界
 
-`src/` 是独立的 React 管理应用：
+`src/` 是独立的 React Web 应用：
 
-- `main.tsx`：浏览器入口；
+- `main.tsx`：浏览器入口，按精确 pathname 选择管理界面或公开用量状态页；
 - `App.tsx`：界面状态与交互编排；
+- `StatusUsage.tsx`：KV 用量快照、周期投影和实时当前时刻线；
 - `admin-api.ts`：同源管理 API 客户端与响应校验；
 - `App.css`、`index.css`：组件和全局样式。
 
-前端不读取 Worker secret，不参与协议转换，也不直接访问 KV。Vite 在 HTML 中写入 CSP nonce
+前端不读取 Worker secret，不参与协议转换，也不直接访问 KV。公开状态页只读取经过字段裁剪的
+同源 `/status/usage/data`。Vite 在 HTML 中写入 CSP nonce
 占位符；Worker 每次返回管理页时生成新 nonce 并替换该占位符。
 
 ## 5. 请求处理流程
@@ -130,7 +132,22 @@ hidden admin path
 管理路由不启用 CORS。页面只在精确的 `/<ADMIN_PATH>/admin` 路径返回，不配置全站 SPA
 fallback。
 
-### 5.4 定时维护
+### 5.4 公开用量状态
+
+```text
+GET /status/usage
+  → ASSETS/index.html → inject CSP nonce → React status view
+  → GET /status/usage/data
+       → decrypt CODEX_USAGE from AUTH_KV
+       → remove alert-delivery fields
+       → return cached quota snapshot
+```
+
+状态页不要求管理会话或 API Key。时间轴从各窗口当前周期起点中最早的时间开始，只向后投影；
+5 小时窗口以固定 5 小时为周期，周窗口以固定 7 天为周期。数据轮询和 Cron 均为 5 分钟，当前
+时刻线由浏览器时钟每秒更新。
+
+### 5.5 定时维护
 
 `scheduled` 事件每 5 分钟运行一次。每次运行会通过受信任 relay 获取 Codex 用量，计算每个
 Codex 额度窗口的额度剩余百分比、剩余毫秒数和剩余时间百分比，然后把当前快照与告警状态加密

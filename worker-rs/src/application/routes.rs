@@ -149,6 +149,20 @@ pub struct MatchedAdminRoute {
     pub route: AdminRoute,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusRoute {
+    Page,
+    Usage,
+}
+
+pub fn match_status_route(method: &str, pathname: &str) -> Option<StatusRoute> {
+    match (method, pathname) {
+        ("GET", "/status/usage") => Some(StatusRoute::Page),
+        ("GET", "/status/usage/data") => Some(StatusRoute::Usage),
+        _ => None,
+    }
+}
+
 pub fn match_admin_route(
     method: &str,
     pathname: &str,
@@ -292,5 +306,20 @@ mod tests {
             match_admin_route("POST", "/secret/admin/auth-proxy/oauth/device/", "secret"),
             None
         );
+    }
+
+    #[test]
+    fn public_usage_status_routes_are_exact_get_routes() {
+        assert_eq!(
+            match_status_route("GET", "/status/usage"),
+            Some(StatusRoute::Page)
+        );
+        assert_eq!(
+            match_status_route("GET", "/status/usage/data"),
+            Some(StatusRoute::Usage)
+        );
+        assert_eq!(match_status_route("POST", "/status/usage"), None);
+        assert_eq!(match_status_route("GET", "/status/usage/"), None);
+        assert_eq!(match_status_route("GET", "/status/usage/data/"), None);
     }
 }

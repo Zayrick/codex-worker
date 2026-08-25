@@ -40,6 +40,9 @@ pnpm install --frozen-lockfile
 若必须复用现有 namespace，应在 `kv_namespaces` 条目中明确填写 `id`，并在部署前确认该
 namespace 中的数据由当前 `DATA_ENCRYPTION_KEY` 加密。
 
+公开用量页位于 `/status/usage`。它依赖 Cron 已成功写入至少一次 `CODEX_USAGE`；首次采样前页面
+保持空状态，之后浏览器每 5 分钟读取一次 KV 快照。
+
 ## 3. 运行时 secret
 
 | Secret | 格式 | 作用 |
