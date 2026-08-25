@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+	type CSSProperties,
+} from "react";
 import "./StatusUsage.css";
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
 const CLOCK_INTERVAL_MS = 1_000;
 const HOUR_MS = 60 * 60 * 1_000;
 const DAY_MS = 24 * HOUR_MS;
+const MOBILE_DAY_HEIGHT_PX = 96;
 const MOCK_USAGE = import.meta.env.DEV && new URLSearchParams(window.location.search).has("mock");
 
 type QuotaKind = "five_hour" | "weekly" | "monthly" | "primary" | "secondary";
@@ -32,9 +39,11 @@ interface TimelineSegment {
 	end: number;
 	left: number;
 	width: number;
-	state: "past" | "live" | "future";
+	state: "live" | "future";
 	isReportedCycle: boolean;
 }
+
+type TimelineStyle = CSSProperties & Record<`--${string}`, string | number>;
 
 function StatusUsage() {
 	const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
@@ -116,7 +125,14 @@ function StatusUsage() {
 				{snapshot ? (
 					<div className="timeline-card">
 						<div className="timeline-scroll">
-							<div className="timeline-grid">
+							<div
+								className="timeline-grid"
+								style={{
+									"--lane-count": snapshot.windows.length,
+									"--mobile-min-width": `${52 + snapshot.windows.length * 60}px`,
+									"--timeline-height": `${Math.max(384, days.length * MOBILE_DAY_HEIGHT_PX)}px`,
+								} as TimelineStyle}
+							>
 								<div className="timeline-axis">
 									<div className="axis-heading">
 										<span>配额</span>
@@ -124,7 +140,11 @@ function StatusUsage() {
 									</div>
 									<div className="axis-days">
 										{days.map((day) => (
-											<div className={day.isToday ? "axis-day today" : "axis-day"} key={day.at} style={{ width: `${day.width}%` }}>
+											<div
+												className={day.isToday ? "axis-day today" : "axis-day"}
+												key={day.at}
+												style={{ "--day-size": `${day.width}%` } as TimelineStyle}
+											>
 												<span>{day.weekday}</span>
 												<b>{day.label}</b>
 											</div>
@@ -135,16 +155,17 @@ function StatusUsage() {
 									<span
 										className="timeline-now-overlay"
 										aria-hidden="true"
-										style={{ gridRow: `2 / span ${snapshot.windows.length}` }}
+										style={{ "--now-position": `${nowLeft}%` } as TimelineStyle}
 									>
-										<i style={{ left: `${nowLeft}%` }} />
+										<i />
 									</span>
 								) : null}
 
-								{snapshot.windows.map((window) => (
+								{snapshot.windows.map((window, index) => (
 									<QuotaLane
 										key={window.id}
 										days={days}
+										index={index}
 										now={now}
 										span={span}
 										window={window}
@@ -155,7 +176,6 @@ function StatusUsage() {
 						<footer className="timeline-legend">
 							<span><i className="legend-live" />当前周期</span>
 							<span><i className="legend-future" />后续周期</span>
-							<span><i className="legend-past" />本周已结束</span>
 							<span className="legend-note">填充表示当前周期剩余额度</span>
 						</footer>
 					</div>
@@ -165,38 +185,61 @@ function StatusUsage() {
 	);
 }
 
-function QuotaLane({ window, span, now, days }: {
+function QuotaLane({ window, span, now, days, index }: {
 	window: UsageWindow;
 	span: { start: number; end: number };
 	now: number;
 	days: ReturnType<typeof dayTicks>;
+	index: number;
 }) {
 	const segments = useMemo(
 		() => projectWindow(window, span.start, span.end, now),
 		[window, span, now],
 	);
 	const remaining = finitePercent(window.remainingPercent);
+	const resetAt = validTimestamp(window.resetAt);
 	const categoryLabel = window.category === "code_review" ? "代码审查" : window.name || "Codex";
 
 	return (
-		<div className={`quota-lane category-${window.category}`}>
+		<div
+			className={`quota-lane category-${window.category}`}
+			style={{ "--lane-column": index + 2 } as TimelineStyle}
+		>
 			<div className="lane-heading">
 				<div><span className="lane-dot" /><strong>{categoryLabel}</strong><em>{periodLabel(window)}</em></div>
+				{remaining !== null || resetAt !== null ? (
+					<span className="lane-mobile-summary">
+						{remaining !== null ? <b>{Math.round(remaining)}%</b> : null}
+						{resetAt !== null ? <small>{formatRefreshDate(resetAt)}</small> : null}
+					</span>
+				) : null}
 			</div>
 			<div className="lane-track">
 				<div className="track-days">
-					{days.map((day) => <span className={day.isToday ? "today" : ""} key={day.at} style={{ width: `${day.width}%` }} />)}
+					{days.map((day) => (
+						<span
+							className={day.isToday ? "today" : ""}
+							key={day.at}
+							style={{ "--day-size": `${day.width}%` } as TimelineStyle}
+						/>
+					))}
 				</div>
 				{segments.length === 0 ? <span className="lane-empty">暂无可投影的重置时间</span> : null}
 				{segments.map((segment) => (
 					<div
 						className={`quota-segment ${segment.state}${segment.isReportedCycle && segment.width <= 12 ? " narrow-current" : ""}`}
 						key={segment.start}
-						style={{ left: `${segment.left}%`, width: `${segment.width}%` }}
+						style={{
+							"--segment-offset": `${segment.left}%`,
+							"--segment-size": `${segment.width}%`,
+						} as TimelineStyle}
 						title={`${formatDateTime(segment.start)} → ${formatDateTime(segment.end)}${segment.isReportedCycle && remaining !== null ? `\n剩余 ${Math.round(remaining)}%` : ""}`}
 					>
 						{segment.isReportedCycle && remaining !== null ? (
-							<span className="segment-remaining" style={{ width: `${remaining}%` }} />
+							<span
+								className="segment-remaining"
+								style={{ "--remaining": `${remaining}%` } as TimelineStyle}
+							/>
 						) : null}
 						{segment.isReportedCycle && remaining !== null ? (
 							<b className="segment-summary">{Math.round(remaining)}% · {formatRefreshDate(segment.end)}</b>
@@ -272,13 +315,13 @@ function projectWindow(window: UsageWindow, start: number, end: number, now: num
 		const windowStart = windowEnd - period;
 		const clippedStart = Math.max(start, windowStart);
 		const clippedEnd = Math.min(end, windowEnd);
-		if (clippedEnd > clippedStart) {
+		if (clippedEnd > clippedStart && windowEnd > now) {
 			segments.push({
 				start: windowStart,
 				end: windowEnd,
 				left: ((clippedStart - start) / (end - start)) * 100,
 				width: ((clippedEnd - clippedStart) / (end - start)) * 100,
-				state: windowEnd <= now ? "past" : windowStart <= now ? "live" : "future",
+				state: windowStart <= now ? "live" : "future",
 				isReportedCycle: Math.abs(windowEnd - resetAt) < 1_000,
 			});
 		}
