@@ -101,23 +101,17 @@ fetch event
 
 路由选择 adapter 和 presenter；传输层只负责请求生命周期、上游 I/O 和 Worker Response。
 
-### 5.2 Codex 原生映射与透明代理
+### 5.2 Codex 原生映射与透明转发
 
-Responses、Images、Realtime 和 `/backend-api/codex/*` 路径进入 Codex proxy。Responses 与
-compact 只执行明确规定的 JSON 策略；其他代理正文直接使用 `ReadableStream`。Responses
-WebSocket 只处理客户端发往上游的 `response.create` 和 `response.append` 文本帧，其余文本、
-二进制和反向帧保持不变。
+Responses、Images 和 Realtime 的已注册公开路径进入 Codex proxy。Responses 与 compact 只执行
+明确规定的 JSON 策略；其他代理正文直接使用 `ReadableStream`。Responses WebSocket 只处理
+客户端发往上游的 `response.create` 和 `response.append` 文本帧，其余文本、二进制和反向帧
+保持不变。
 
-`AUTH_PROXY_HOST` 上的所有请求使用独立镜像代理流程：
-
-```text
-request → path policy → optional account_id credential selection → trusted relay
-```
-
-该流程保持路径、Query、端到端 header 和流式正文，并优先于 Worker 的健康检查、管理面、静态
-资源和公开 API 路由。只有 `/backend-api` 路径族进入账户凭据选择；未匹配或停用的代理账户保留
-原请求凭据，匹配记录优先选择独立 OAuth，独立凭据不可用时选择主 OAuth。其他路径始终保留
-原始凭据直接转发。
+路由按路径和方法选择，不依赖入站 Host。`/backend-api` 路径族和其他未注册 HTTP 路径保持
+路径、Query、端到端 header 与流式正文，转发到受信任 relay。`/backend-api` 请求可按
+`account_id` 选择独立 OAuth 或主 OAuth；未匹配或停用的代理账户以及其他未注册路径保留原请求
+凭据。本地、管理和已注册协议路径由对应 handler 处理。
 
 ### 5.3 管理请求
 
@@ -199,9 +193,9 @@ API Key 与代理账户使用后端分配的 UUID 定位。缺少 `id` 的 `API_
 - Live/Realtime multipart bootstrap 限制为 16 MiB；
 - 图片、实时媒体信令和其他透明代理正文保持流式；
 - 上游重定向使用手动模式，避免 OAuth 自动发送到未知目标；
-- 公开协议 API 应用凭据与响应 header 隔离；镜像代理保留端到端 header，并由
+- 公开协议 API 应用凭据与响应 header 隔离；透明转发保留端到端 header，并由
   runtime 管理连接级 header；
-- 公开协议 API 和管理面使用 `Cache-Control: no-store`；镜像代理保持上游响应
+- 公开协议 API 和管理面使用 `Cache-Control: no-store`；透明转发保持上游响应
   语义。
 
 Cloudflare 账户与 runtime 的限制仍然适用，具体数值应查阅当前的
@@ -232,7 +226,7 @@ Cloudflare 账户与 runtime 的限制仍然适用，具体数值应查阅当前
 
 - Cloudflare I/O 只能进入 `transport`；内部协议和领域模块保持 runtime-neutral。
 - 新增协议需要同时定义精确路由、请求 adapter、响应 presenter 和传输组合。
-- 未匹配路径、错误方法和无效下游凭据保持隐藏式响应，不暴露受保护能力。
+- 未注册路径透明转发；本地、管理和已注册协议路径的错误方法及无效下游凭据保持隐藏式响应。
 - 不得为方便转换而无界收集代理正文；新增解析路径必须定义编码体和解码体上限。
 - 不得在模块级缓存 OAuth、API Key、管理会话或请求状态。
 - 配置、路由或协议语义变更必须同步更新 [API 文档](api.md)、

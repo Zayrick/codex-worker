@@ -223,7 +223,6 @@ fn proxy_path_and_method_policy_reject_unsupported_realtime_shapes() {
         "/v1/alpha/search",
         "/v1/live",
         "/v1/realtime/calls/call_123",
-        "/backend-api/codex/videos/video_123",
     ] {
         assert!(is_codex_proxy_path(path), "{path}");
     }
@@ -231,6 +230,7 @@ fn proxy_path_and_method_policy_reject_unsupported_realtime_shapes() {
         "/v1/videos/video_123/content",
         "/v1/realtime/unknown/path",
         "/v1/images-other",
+        "/backend-api/codex/videos/video_123",
     ] {
         assert!(!is_codex_proxy_path(path), "{path}");
     }

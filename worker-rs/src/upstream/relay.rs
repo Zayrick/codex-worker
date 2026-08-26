@@ -1,4 +1,4 @@
-use url::{Host, Url};
+use url::Url;
 
 use crate::core::{ApiError, AppResult};
 
@@ -7,32 +7,11 @@ use super::codex::{CodexCredentials, HeaderBag, is_websocket_upgrade, resolve_ch
 pub const ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 const BACKEND_API_ROOT: &str = "/backend-api";
 
-pub fn normalize_auth_proxy_host(value: &str) -> Option<String> {
-    let value = value.trim().trim_end_matches('.');
-    if value.is_empty() || value.contains('/') || value.contains(':') {
-        return None;
-    }
-    match Host::parse(value).ok()? {
-        Host::Domain(domain) => Some(domain.trim_end_matches('.').to_ascii_lowercase()),
-        Host::Ipv4(_) | Host::Ipv6(_) => None,
-    }
+pub fn is_backend_api_path(pathname: &str) -> bool {
+    pathname == BACKEND_API_ROOT || pathname.starts_with("/backend-api/")
 }
 
-pub fn matches_auth_proxy_request(configured_host: &str, client_url: &Url) -> bool {
-    let Some(configured_host) = normalize_auth_proxy_host(configured_host) else {
-        return false;
-    };
-    client_url
-        .host_str()
-        .and_then(normalize_auth_proxy_host)
-        .is_some_and(|host| host == configured_host)
-}
-
-pub fn uses_auth_proxy_credentials(pathname: &str) -> bool {
-    is_backend_api_path(pathname)
-}
-
-pub fn resolve_auth_proxy_url(relay_origin: &str, client_url: &Url) -> AppResult<Url> {
+pub fn resolve_relay_url(relay_origin: &str, client_url: &Url) -> AppResult<Url> {
     let search = client_url
         .query()
         .map(|query| format!("?{query}"))
@@ -41,15 +20,15 @@ pub fn resolve_auth_proxy_url(relay_origin: &str, client_url: &Url) -> AppResult
     if target.origin() == client_url.origin() {
         return Err(ApiError::new(
             500,
-            "AUTH_PROXY_HOST and CHATGPT_RELAY_URL must not resolve to the same origin.",
+            "The request origin and CHATGPT_RELAY_URL must not be the same origin.",
         )
         .with_kind("configuration_error")
-        .with_code("auth_proxy_relay_loop"));
+        .with_code("relay_loop"));
     }
     Ok(target)
 }
 
-pub fn auth_proxy_request_headers(
+pub fn relay_request_headers(
     source: &HeaderBag,
     credentials: Option<&CodexCredentials>,
 ) -> HeaderBag {
@@ -86,13 +65,6 @@ pub fn auth_proxy_request_headers(
         headers.set("upgrade", "websocket");
     }
     headers
-}
-
-fn is_backend_api_path(pathname: &str) -> bool {
-    pathname == BACKEND_API_ROOT
-        || pathname
-            .strip_prefix(BACKEND_API_ROOT)
-            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 fn blocked_request_header(
@@ -132,54 +104,26 @@ mod tests {
     }
 
     #[test]
-    fn matches_every_path_only_on_the_exact_configured_host() {
-        for path in [
-            "/",
-            "/backend-api/codex/models",
-            "/assets/app.js",
-            "/healthz",
-        ] {
-            let matching = Url::parse(&format!("https://Proxy.Example{path}")).unwrap();
-            assert!(matches_auth_proxy_request("proxy.example", &matching));
-            assert!(matches_auth_proxy_request("proxy.example.", &matching));
-            assert!(!matches_auth_proxy_request("other.example", &matching));
-        }
-        assert!(!matches_auth_proxy_request(
-            "https://proxy.example",
-            &Url::parse("https://proxy.example/").unwrap()
-        ));
+    fn recognizes_the_backend_api_path_family() {
+        assert!(is_backend_api_path("/backend-api"));
+        assert!(is_backend_api_path("/backend-api/codex/models"));
+        assert!(!is_backend_api_path("/backend-api-legacy"));
+        assert!(!is_backend_api_path("/assets/backend-api"));
     }
 
     #[test]
-    fn replaces_credentials_only_for_the_backend_api_path_family() {
-        assert!(uses_auth_proxy_credentials("/backend-api"));
-        assert!(uses_auth_proxy_credentials("/backend-api/codex/models"));
-        assert!(!uses_auth_proxy_credentials("/"));
-        assert!(!uses_auth_proxy_credentials("/backend-api-legacy"));
-        assert!(!uses_auth_proxy_credentials("/assets/backend-api"));
-    }
-
-    #[test]
-    fn preserves_path_and_query_but_rejects_a_recursive_relay() {
+    fn builds_target_url_and_rejects_a_recursive_relay() {
         let client = Url::parse(
-            "https://proxy.example/backend-api/codex/models?client_version=1.2.3&channel=stable",
+            "https://worker.example/backend-api/codex/models?client_version=1.2.3&channel=stable",
         )
         .unwrap();
         assert_eq!(
-            resolve_auth_proxy_url("https://relay.example", &client)
+            resolve_relay_url("https://relay.example", &client)
                 .unwrap()
                 .as_str(),
             "https://relay.example/backend-api/codex/models?client_version=1.2.3&channel=stable"
         );
-        assert!(resolve_auth_proxy_url("https://proxy.example", &client).is_err());
-
-        let asset = Url::parse("https://proxy.example/assets/app.js?v=42").unwrap();
-        assert_eq!(
-            resolve_auth_proxy_url("https://relay.example", &asset)
-                .unwrap()
-                .as_str(),
-            "https://relay.example/assets/app.js?v=42"
-        );
+        assert!(resolve_relay_url("https://worker.example", &client).is_err());
     }
 
     #[test]
@@ -191,9 +135,9 @@ mod tests {
             ("x-custom", "preserved"),
             ("connection", "keep-alive, x-hop"),
             ("x-hop", "removed"),
-            ("host", "proxy.example"),
+            ("host", "worker.example"),
         ]);
-        let headers = auth_proxy_request_headers(&source, None);
+        let headers = relay_request_headers(&source, None);
 
         assert_eq!(headers.get("authorization"), Some("Bearer original"));
         assert_eq!(headers.get(ACCOUNT_ID_HEADER), Some("original-account"));
@@ -211,7 +155,7 @@ mod tests {
             (ACCOUNT_ID_HEADER, "allowed-account"),
             ("x-custom", "preserved"),
         ]);
-        let headers = auth_proxy_request_headers(&source, Some(&credentials()));
+        let headers = relay_request_headers(&source, Some(&credentials()));
         assert_eq!(
             headers.get("authorization"),
             Some("Bearer replacement-token")
@@ -220,7 +164,7 @@ mod tests {
         assert_eq!(headers.get("x-custom"), Some("preserved"));
 
         let without_authorization = HeaderBag::from_pairs([(ACCOUNT_ID_HEADER, "allowed-account")]);
-        let headers = auth_proxy_request_headers(&without_authorization, Some(&credentials()));
+        let headers = relay_request_headers(&without_authorization, Some(&credentials()));
         assert!(!headers.contains("authorization"));
         assert_eq!(headers.get(ACCOUNT_ID_HEADER), Some("replacement-account"));
     }
@@ -234,7 +178,7 @@ mod tests {
             ("sec-websocket-version", "13"),
             ("sec-websocket-protocol", "openai-responses-v1"),
         ]);
-        let headers = auth_proxy_request_headers(&source, None);
+        let headers = relay_request_headers(&source, None);
         assert_eq!(headers.get("upgrade"), Some("websocket"));
         assert_eq!(
             headers.get("sec-websocket-protocol"),

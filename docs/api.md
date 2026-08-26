@@ -20,8 +20,9 @@ Codex Worker 通过协议转换、Codex 原生映射和透明传输提供多种�
 
 ## 2. 鉴权与通用行为
 
-除健康检查、已知 API 的预检请求、管理入口和镜像代理 Host 外，所有公开 API 都要求一个
-已启用的下游 API Key。支持以下 header，选择优先级固定：
+明确注册的公开协议 API 要求一个已启用的下游 API Key；健康检查、已知 API 的预检请求、管理
+入口、`/backend-api` 路径族和其他未注册路径不使用该鉴权。公开 API 支持以下 header，选择
+优先级固定：
 
 1. `Authorization: Bearer <key>`；
 2. `X-Api-Key: <key>`；
@@ -59,24 +60,23 @@ CORS。
 | `GET /v1/live/{call_id}` + WebSocket Upgrade | 透明传输 | 直连 `api.openai.com` 的 Live sideband |
 | `GET /v1/realtime?call_id=…` + WebSocket Upgrade | 透明传输 | 校验 `call_id` 后直连 Realtime sideband |
 | `GET /v1/realtime/calls/{call_id}` + WebSocket Upgrade | 透明传输 | 直连对应 Realtime sideband |
-| `/backend-api/codex[/…]` | 透明传输 | Codex CLI 低层别名；Responses 根路径仍使用专用策略 |
-
 一般透明代理路径拒绝 `CONNECT`；`OPTIONS` 由预检逻辑处理。除表中明确限制方法的路径外，
 路由层允许其他 HTTP 方法，上游能力仍由目标 action 决定。
 
-### 镜像代理与 Backend API 凭据替换
+### Backend API 与透明转发
 
-Host 与 `AUTH_PROXY_HOST` 匹配的所有路径都使用 `CHATGPT_RELAY_URL` 作为上游，保留请求方法、
-路径、Query、流式正文和端到端 header，并直接返回上游 HTTP、SSE 或 WebSocket 响应。镜像 Host
-优先于健康检查、管理面、静态资源和公开 API 路由；该 Host 上的全部请求都独立于公开 API Key
-鉴权和协议转换。
+路由按请求路径和方法选择，不按入站 Host 分流。`/backend-api` 路径族直接以原方法、路径、
+Query、流式正文和端到端 header 转发到 `CHATGPT_RELAY_URL`，并返回 relay 的 HTTP、SSE 或
+WebSocket 响应。该路径族不执行下游 API Key 鉴权或协议转换。
 
-只有 `/backend-api` 路径族允许替换凭据；其他路径原样保留 `Authorization`、
-`ChatGPT-Account-ID` 和 Cookie。管理端维护代理账户的名称、`account_id`、启用状态和独立 OAuth。请求中的
-`ChatGPT-Account-ID` 精确匹配一条已启用记录时，Worker 优先使用该记录自己的有效 OAuth；
-该记录尚未登录、Token 已过期或凭据缺少账户 ID 时自动回退到主 Codex OAuth。
-两者都会替换请求中已有的 `Authorization` 和 `ChatGPT-Account-ID`。记录已停用或未匹配时按
-原认证信息转发。
+`/backend-api` 请求中的 `ChatGPT-Account-ID` 精确匹配一条已启用代理账户记录时，Worker 优先
+使用该记录自己的有效 OAuth；该记录尚未登录、Token 已过期或凭据缺少账户 ID 时自动回退到主
+Codex OAuth。两者都会替换请求中已有的 `Authorization` 和 `ChatGPT-Account-ID`。记录已停用或
+未匹配时按原认证信息转发。
+
+未注册的其他 HTTP 路径同样透明转发到 relay，并保留 `Authorization`、
+`ChatGPT-Account-ID`、Cookie 和其他端到端 header。健康检查、状态页、隐藏管理路径和已注册
+协议 API 按各自的本地路由处理。
 
 当 `/v1/models` 包含 `client_version` 查询参数时，Worker 保留 Codex CLI 模型目录格式，而
 不转换为 OpenAI model list。
@@ -174,28 +174,22 @@ Cloudflare 的请求、连接和 WebSocket 限制可能变化，请以当前
 
 ## 9. 错误、CORS 与缓存
 
-- 未匹配路径、错误方法和无效下游 API Key 返回空正文 `404`；
+- 本地路由和已注册协议路径的错误方法、无效下游 API Key 返回空正文 `404`；
+- 未注册路径透明转发；
 - Worker 生成的协议错误分别使用 OpenAI、Anthropic 或 Google envelope；
 - 只有已确认的公开 API 响应添加 CORS header；管理响应不添加 CORS；
-- 公开协议 API 和管理响应使用 `Cache-Control: no-store`；镜像代理保留上游响应
+- 公开协议 API 和管理响应使用 `Cache-Control: no-store`；透明转发保留上游响应
   header；
-- 公开协议 API 过滤客户端凭据、Cookie 和账户 ID；镜像代理仅在 `/backend-api` 路径族按许可
+- 公开协议 API 过滤客户端凭据、Cookie 和账户 ID；透明转发仅在 `/backend-api` 路径族按许可
   配置处理认证 header，其他路径保持原始凭据。
 
 默认 `CORS_ORIGIN` 为 `*`，当前配置只支持一个原样的 origin 值，不实现动态 allowlist，也不
 启用 credentialed CORS。
 
-## 10. 明确不支持的能力
+## 10. 透明路径的兼容边界
 
-- `/v1/videos/*` 与 `/openai/v1/videos/*`；
-- `/v1beta/interactions`；
-- 未列出的 Gemini action；
-- 供应商专用鉴权、计费或 token-count 服务；
-- UDP RTP/RTCP 媒体 relay；
-- 未注册的其他供应商路径。
-
-`/backend-api/codex/*` 是调用方主动选择的低层透明路径。它可以传输私有 action，但不构成
-对该 action 的稳定性、可用性或协议格式保证。
+Worker 不解析未注册路径和 `/backend-api/*` 的协议正文，也不保证 relay 对相应 action 的
+稳定性、可用性、鉴权方式或响应格式。UDP RTP/RTCP 等非 HTTP 能力不在转发范围内。
 
 ## 11. 用量状态
 
@@ -210,7 +204,8 @@ Cloudflare 的请求、连接和 WebSocket 限制可能变化，请以当前
 `GET /status/usage/data` 返回页面所需的公开快照字段：采样时间、订阅类型，以及每个窗口的 ID、
 类别、名称、周期类型、已用/剩余百分比、窗口秒数和重置时间。它不返回 OAuth、账户 ID、邮箱、
 API Key、Cookie、管理信息或内部告警投递状态。尚未完成首次采样时返回空快照；读取失败时返回
-`503`。两个路径均精确匹配，其他方法和尾部斜杠返回空 `404`。
+`503`。两个路径均精确匹配且只接受 `GET`；同路径的其他方法返回空 `404`，其他路径遵循透明
+转发规则。
 
 ## 12. 管理 API
 

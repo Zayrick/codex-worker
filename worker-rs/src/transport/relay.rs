@@ -9,36 +9,34 @@ use crate::{
     },
     core::{ApiError, AppResult},
     upstream::{
-        auth_proxy::{
-            auth_proxy_request_headers, resolve_auth_proxy_url, uses_auth_proxy_credentials,
-        },
         codex::{CodexCredentials, HeaderBag},
+        relay::{ACCOUNT_ID_HEADER, is_backend_api_path, relay_request_headers, resolve_relay_url},
     },
 };
 
 use super::{config::WorkerConfig, response, store::CloudflareSecretStore};
 
-pub async fn handle_auth_proxy(
+pub async fn handle_relay(
     request: Request,
     client_url: Url,
     env: &Env,
     now_ms: i64,
 ) -> worker::Result<Response> {
-    match dispatch_auth_proxy(request, &client_url, env, now_ms).await {
+    match dispatch_relay(request, &client_url, env, now_ms).await {
         Ok(response) => Ok(response),
         Err(error) => response::api_error(&error),
     }
 }
 
-async fn dispatch_auth_proxy(
+async fn dispatch_relay(
     request: Request,
     client_url: &Url,
     env: &Env,
     now_ms: i64,
 ) -> AppResult<Response> {
     let relay_origin = WorkerConfig::relay_origin(env)?;
-    if !uses_auth_proxy_credentials(client_url.path()) {
-        return forward_auth_proxy(request, client_url, &relay_origin, None).await;
+    if !is_backend_api_path(client_url.path()) {
+        return forward_relay(request, client_url, &relay_origin, None).await;
     }
 
     let encryption_key = WorkerConfig::encryption_key(env)?;
@@ -48,8 +46,8 @@ async fn dispatch_auth_proxy(
         .await?;
     let incoming_account_id = request
         .headers()
-        .get(crate::upstream::auth_proxy::ACCOUNT_ID_HEADER)
-        .map_err(|_| invalid_proxy_request())?;
+        .get(ACCOUNT_ID_HEADER)
+        .map_err(|_| invalid_relay_request())?;
     let replacement = if let Some(account) =
         matching_auth_proxy_account(incoming_account_id.as_deref(), &configured_accounts)
     {
@@ -72,10 +70,10 @@ async fn dispatch_auth_proxy(
         None
     };
 
-    forward_auth_proxy(request, client_url, &relay_origin, replacement.as_ref()).await
+    forward_relay(request, client_url, &relay_origin, replacement.as_ref()).await
 }
 
-pub async fn forward_auth_proxy(
+async fn forward_relay(
     request: Request,
     client_url: &Url,
     relay_origin: &str,
@@ -83,8 +81,8 @@ pub async fn forward_auth_proxy(
 ) -> AppResult<Response> {
     let method = request.inner().method();
     let source = HeaderBag::from_pairs(request.headers().entries());
-    let headers = worker_headers(&auth_proxy_request_headers(&source, credentials))?;
-    let target = resolve_auth_proxy_url(relay_origin, client_url)?;
+    let headers = worker_headers(&relay_request_headers(&source, credentials))?;
+    let target = resolve_relay_url(relay_origin, client_url)?;
     let signal = AbortSignal::from(request.inner().signal());
     let body = (!matches!(method.as_str(), "GET" | "HEAD"))
         .then(|| request.inner().body().map(JsValue::from))
@@ -99,12 +97,12 @@ pub async fn forward_auth_proxy(
     }
     let outgoing = worker::web_sys::Request::new_with_str_and_init(target.as_str(), &init)
         .map(Request::from)
-        .map_err(|_| invalid_proxy_request())?;
+        .map_err(|_| invalid_relay_request())?;
 
     Fetch::Request(outgoing)
         .send_with_signal(&signal)
         .await
-        .map_err(|error| proxy_fetch_error(&error, &signal))
+        .map_err(|error| relay_fetch_error(&error, &signal))
 }
 
 fn worker_headers(headers: &HeaderBag) -> AppResult<Headers> {
@@ -112,23 +110,20 @@ fn worker_headers(headers: &HeaderBag) -> AppResult<Headers> {
     for (name, value) in headers.iter() {
         output
             .append(name, value)
-            .map_err(|_| invalid_proxy_request())?;
+            .map_err(|_| invalid_relay_request())?;
     }
     Ok(output)
 }
 
-fn proxy_fetch_error(error: &worker::Error, signal: &AbortSignal) -> ApiError {
+fn relay_fetch_error(error: &worker::Error, signal: &AbortSignal) -> ApiError {
     if signal.aborted() || is_abort_error(error) {
         return ApiError::new(408, "The request was cancelled or timed out.")
             .with_kind("request_timeout")
             .with_code("request_aborted");
     }
-    ApiError::new(
-        502,
-        "Unable to reach the configured credential proxy relay.",
-    )
-    .with_kind("upstream_error")
-    .with_code("auth_proxy_unavailable")
+    ApiError::new(502, "Unable to reach the configured ChatGPT relay.")
+        .with_kind("upstream_error")
+        .with_code("relay_unavailable")
 }
 
 fn is_abort_error(error: &worker::Error) -> bool {
@@ -144,10 +139,10 @@ fn is_abort_error(error: &worker::Error) -> bool {
     }
 }
 
-fn invalid_proxy_request() -> ApiError {
-    ApiError::new(500, "The credential proxy request could not be created.")
+fn invalid_relay_request() -> ApiError {
+    ApiError::new(500, "The relay request could not be created.")
         .with_kind("internal_error")
-        .with_code("invalid_auth_proxy_request")
+        .with_code("invalid_relay_request")
 }
 
 fn missing_oauth_account_id() -> ApiError {

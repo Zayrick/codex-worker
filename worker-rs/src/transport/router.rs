@@ -1,16 +1,19 @@
 use worker::{Context, Date, Env, Request, Response};
 
 use crate::{
-    application::{is_known_api_path, match_admin_route, match_api_route, match_status_route},
+    application::{
+        is_admin_path_family, is_known_api_path, match_admin_route, match_api_route,
+        match_status_route,
+    },
     auth::{ApiKeyRepository, OAuthRepository, client_token},
-    upstream::auth_proxy::matches_auth_proxy_request,
+    upstream::relay::is_backend_api_path,
 };
 
 use super::{
     admin::handle_admin,
     api::handle_api,
-    auth_proxy::handle_auth_proxy,
     config::WorkerConfig,
+    relay::handle_relay,
     response::{empty, with_cors},
     status::handle_status,
     store::CloudflareSecretStore,
@@ -25,14 +28,23 @@ pub async fn handle_fetch(
     let method = request.inner().method();
     let now_ms = i64::try_from(Date::now().as_millis()).unwrap_or(i64::MAX);
 
-    if WorkerConfig::auth_proxy_host(&env)
-        .as_deref()
-        .is_some_and(|host| matches_auth_proxy_request(host, &url))
-    {
-        return handle_auth_proxy(request, url, &env, now_ms).await;
+    if let Some(admin_path) = WorkerConfig::admin_path(&env) {
+        if let Some(matched) = match_admin_route(&method, url.path(), &admin_path) {
+            return handle_admin(matched, &mut request, &env, now_ms).await;
+        }
+        if is_admin_path_family(url.path(), &admin_path) {
+            return empty(404);
+        }
     }
 
-    if method == "GET" && url.path() == "/healthz" {
+    if is_backend_api_path(url.path()) {
+        return handle_relay(request, url, &env, now_ms).await;
+    }
+
+    if url.path() == "/healthz" {
+        if method != "GET" {
+            return empty(404);
+        }
         let encryption_key = match WorkerConfig::encryption_key(&env) {
             Ok(key) => key,
             Err(error) => return health_failure(&error),
@@ -51,11 +63,8 @@ pub async fn handle_fetch(
     if let Some(route) = match_status_route(&method, url.path()) {
         return handle_status(route, &request, &env).await;
     }
-
-    if let Some(admin_path) = WorkerConfig::admin_path(&env)
-        && let Some(matched) = match_admin_route(&method, url.path(), &admin_path)
-    {
-        return handle_admin(matched, &mut request, &env, now_ms).await;
+    if matches!(url.path(), "/status/usage" | "/status/usage/data") {
+        return empty(404);
     }
 
     if method == "OPTIONS" && is_known_api_path(url.path()) {
@@ -67,7 +76,10 @@ pub async fn handle_fetch(
         .get("upgrade")?
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("websocket"));
     let Some(route) = match_api_route(&method, &url, websocket) else {
-        return empty(404);
+        if is_known_api_path(url.path()) {
+            return empty(404);
+        }
+        return handle_relay(request, url, &env, now_ms).await;
     };
 
     let encryption_key = match WorkerConfig::encryption_key(&env) {

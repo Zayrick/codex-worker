@@ -84,14 +84,8 @@ pub fn is_known_api_path(pathname: &str) -> bool {
 fn match_api_path(pathname: &str) -> Option<ApiRoute> {
     match pathname {
         "/v1/models" => Some(ApiRoute::Models),
-        "/v1/responses"
-        | "/v1/responses/"
-        | "/backend-api/codex/responses"
-        | "/backend-api/codex/responses/" => Some(ApiRoute::Responses),
-        "/v1/responses/compact"
-        | "/v1/responses/compact/"
-        | "/backend-api/codex/responses/compact"
-        | "/backend-api/codex/responses/compact/" => Some(ApiRoute::Compact),
+        "/v1/responses" | "/v1/responses/" => Some(ApiRoute::Responses),
+        "/v1/responses/compact" | "/v1/responses/compact/" => Some(ApiRoute::Compact),
         "/v1/chat/completions" => Some(ApiRoute::ChatCompletions),
         "/v1/completions" => Some(ApiRoute::Completions),
         "/v1/messages" | "/v1/messages/" => Some(ApiRoute::Messages),
@@ -168,11 +162,7 @@ pub fn match_admin_route(
     pathname: &str,
     configured_path: &str,
 ) -> Option<MatchedAdminRoute> {
-    let configured_path = configured_path.trim();
-    if !valid_route_id(configured_path) {
-        return None;
-    }
-    let base_path = format!("/{configured_path}/admin");
+    let base_path = admin_base_path(configured_path)?;
     if pathname == base_path {
         return (method == "GET").then_some(MatchedAdminRoute {
             base_path,
@@ -203,6 +193,21 @@ pub fn match_admin_route(
     Some(MatchedAdminRoute { base_path, route })
 }
 
+pub fn is_admin_path_family(pathname: &str, configured_path: &str) -> bool {
+    let Some(base_path) = admin_base_path(configured_path) else {
+        return false;
+    };
+    pathname == base_path
+        || pathname
+            .strip_prefix(&base_path)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn admin_base_path(configured_path: &str) -> Option<String> {
+    let configured_path = configured_path.trim();
+    valid_route_id(configured_path).then(|| format!("/{configured_path}/admin"))
+}
+
 fn valid_route_id(value: &str) -> bool {
     (1..=128).contains(&value.len())
         && value
@@ -223,16 +228,6 @@ mod tests {
         );
         assert_eq!(match_api_route("GET", &url, false), None);
         assert!(is_known_api_path(url.path()));
-    }
-
-    #[test]
-    fn preserves_extension_methods_for_native_codex_proxy_routes() {
-        let url = Url::parse("https://worker.example/backend-api/codex/files/item").unwrap();
-        assert_eq!(
-            match_api_route("PROPFIND", &url, false),
-            Some(ApiRoute::Proxy)
-        );
-        assert_eq!(match_api_route("CONNECT", &url, false), None);
     }
 
     #[test]
@@ -306,6 +301,8 @@ mod tests {
             match_admin_route("POST", "/secret/admin/auth-proxy/oauth/device/", "secret"),
             None
         );
+        assert!(is_admin_path_family("/secret/admin/unknown", "secret"));
+        assert!(!is_admin_path_family("/secret/administrator", "secret"));
     }
 
     #[test]

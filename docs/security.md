@@ -21,7 +21,6 @@ relay 主机及 OpenAI 账户的安全由部署者负责。
 | --- | --- | --- |
 | `ADMIN_PATH` | 隐藏管理入口，降低无目标扫描 | 旧管理 URL 失效 |
 | `ADMIN_SECRET` | 验证管理登录，并参与会话绑定 | 所有现有管理会话失效 |
-| `AUTH_PROXY_HOST` | 指定整站镜像代理的入站 Host | 后续请求按新 Host 分流 |
 | `BARK_PUSH_URL` | 指定包含设备 key 的 Bark HTTPS 推送端点 | 后续用量提醒切换到新设备或服务 |
 | `DINGTALK_SECRET` | 为钉钉机器人请求生成 HMAC-SHA256 签名 | 旧密钥生成的后续请求不再通过验证 |
 | `DINGTALK_WEBHOOK_URL` | 指定包含 access token 的钉钉机器人 HTTPS Webhook | 后续用量提醒切换到新机器人 |
@@ -128,13 +127,16 @@ key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受
 将签名和时间戳追加到请求 URL，并使用手动重定向策略。钉钉响应以 64 KiB 为上限读取，只有
 HTTP 2xx 且 JSON `errcode` 为 `0` 才视为成功。
 
-### 镜像代理与 Backend API 凭据替换
+### 透明转发与 Backend API 凭据替换
 
-`AUTH_PROXY_HOST` 上的所有请求都将端到端 header 和正文发送到 `CHATGPT_RELAY_URL`，因此该
-Host 与 relay 必须处于部署者控制的信任边界内。只有 `/backend-api` 路径族允许修改凭据：匹配
-已启用代理账户的 `account_id` 优先使用按代理 UUID 独立加密的 OAuth；
-未独立登录、Token 已过期或缺少账户 ID 时使用主 OAuth。已停用或未匹配的请求保留原
-Authorization、账户 ID 和 Cookie。其他路径始终原样保留 Authorization、账户 ID 和 Cookie。
+Worker 按路径和方法路由，不按入站 Host 分流。`/backend-api` 路径族和其他未注册路径发送到
+`CHATGPT_RELAY_URL`，因此 relay 必须处于部署者控制的信任边界内。隐藏管理路径族始终在本地
+终止，管理会话 Cookie 不会由透明转发发送到 relay。
+
+只有 `/backend-api` 路径族允许修改凭据：匹配已启用代理账户的 `account_id` 时，优先使用按代理
+UUID 独立加密的 OAuth；未独立登录、Token 已过期或缺少账户 ID 时使用主 OAuth。已停用或未
+匹配的请求保留原 Authorization、账户 ID 和 Cookie。其他未注册路径也保留 Authorization、
+账户 ID、Cookie 和端到端 header。
 
 ## 7. KV 一致性与撤销语义
 
@@ -166,9 +168,9 @@ Workers KV 是最终一致存储。本项目对 OAuth 和 API Key 常规读取�
 公开 API 的 `CORS_ORIGIN` 默认是 `*`。它是单个静态值，不是动态 allowlist，且不启用
 credentialed CORS。若服务仅供固定前端使用，应在部署配置中设置精确 origin。
 
-管理端不使用公开 API 的 CORS 策略。未知路径、错误方法、无效 API Key 以及关键鉴权配置缺失
-通常返回空正文 `404`。协议层可公开的错误使用对应供应商 envelope，但不得包含 OAuth、API
-Key、管理密钥、加密根密钥、IV 或密文。
+管理端不使用公开 API 的 CORS 策略。本地、管理和已注册协议路径的错误方法、无效 API Key
+以及关键鉴权配置缺失通常返回空正文 `404`；未注册路径由 relay 决定响应。协议层可公开的错误
+使用对应供应商 envelope，但不得包含 OAuth、API Key、管理密钥、加密根密钥、IV 或密文。
 
 ## 10. 日志与运维要求
 

@@ -16,7 +16,6 @@ pub fn is_codex_proxy_path(pathname: &str) -> bool {
         || pathname == "/v1/alpha/search"
         || is_live_proxy_path(pathname)
         || is_realtime_proxy_path(pathname)
-        || is_path_family(pathname, CODEX_ROOT)
 }
 
 pub fn is_codex_proxy_request_allowed(

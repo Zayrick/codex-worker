@@ -50,7 +50,6 @@ namespace 中的数据由当前 `DATA_ENCRYPTION_KEY` 加密。
 | --- | --- | --- |
 | `ADMIN_PATH` | 1–128 个 ASCII 字母、数字、`_` 或 `-` | 构成隐藏管理路径 |
 | `ADMIN_SECRET` | 独立生成的高强度随机值 | 验证管理登录并绑定会话 |
-| `AUTH_PROXY_HOST` | 不含 scheme、端口和路径的主机名 | 整站镜像代理的入站 Host；仅 `/backend-api` 允许替换凭据 |
 | `BARK_PUSH_URL` | `https://<host>/<device-key>` | 接收 Codex 消耗进度变化和额度重置提醒 |
 | `DINGTALK_SECRET` | `SEC...` | 钉钉自定义机器人安全设置中的加签密钥 |
 | `DINGTALK_WEBHOOK_URL` | `https://oapi.dingtalk.com/robot/send?access_token=...` | 钉钉自定义机器人的完整 Webhook 地址 |
@@ -58,7 +57,8 @@ namespace 中的数据由当前 `DATA_ENCRYPTION_KEY` 加密。
 | `DATA_ENCRYPTION_KEY` | 32 个随机字节的无填充 base64url | 加密持久化凭据和会话状态 |
 
 `CHATGPT_RELAY_URL` 必须类似 `https://relay.example.com`，不能包含路径、查询参数、fragment、
-userinfo 或尾部 `/`。Worker 会自行追加所有上游路径。
+userinfo 或尾部 `/`。Worker 会自行追加所有上游路径，并拒绝转发到当前请求的 origin。部署者
+还必须避免其他 Worker 域名别名指向 relay，以免形成递归调用。
 
 `BARK_PUSH_URL` 必须是 Bark 设备端点，例如 `https://api.day.app/<device-key>`。它必须使用
 HTTPS，不能包含 userinfo、query、fragment 或尾部 `/`。自托管 Bark 可使用带路径前缀的端点，
@@ -125,7 +125,7 @@ Windows PowerShell 使用：
 Copy-Item .dev.vars.example .dev.vars
 ```
 
-填写八个 secret 后启动：
+填写七个 secret 后启动：
 
 ```sh
 pnpm dev
@@ -154,7 +154,6 @@ pnpm exec wrangler login
 ```dotenv
 ADMIN_PATH=<random-path-segment>
 ADMIN_SECRET=<independent-random-secret>
-AUTH_PROXY_HOST=proxy.example.com
 BARK_PUSH_URL=https://api.day.app/<device-key>
 DINGTALK_SECRET=SEC...
 DINGTALK_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=<access-token>
@@ -216,7 +215,7 @@ workflow 时，`deploy` job 会安装固定版本的工具链并执行 `pnpm dep
 | `CLOUDFLARE_API_TOKEN` | 非交互 Wrangler 部署凭据 |
 | `CLOUDFLARE_ACCOUNT_ID` | 目标 Cloudflare account |
 
-API token 应限制到唯一目标 account，并只授予部署 Worker 及管理项目所用资源所需的权限。八个
+API token 应限制到唯一目标 account，并只授予部署 Worker 及管理项目所用资源所需的权限。七个
 Worker runtime secret 不应复制到 GitHub；它们应在首次部署时写入 Cloudflare。
 
 `deploy` job 在同一个 runner 中完成 Rust/Wasm 构建、Vite 构建和 Wrangler 部署，确保生成
@@ -268,7 +267,7 @@ curl -i https://worker.example.com/v1/models \
 
 | 现象 | 检查项 |
 | --- | --- |
-| 部署提示缺少 secret | 确认八个 required secret 已上传到目标 Worker |
+| 部署提示缺少 secret | 确认七个 required secret 已上传到目标 Worker |
 | `/healthz` 返回 `404` | 检查 OAuth 是否存在、可解密且未过期 |
 | API 返回空 `404` | 检查路径、方法、API Key 状态、KV binding 和加密密钥 |
 | 上游接口返回错误 | 检查 relay origin、relay 日志策略、OAuth 状态和账户能力 |

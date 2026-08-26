@@ -28,7 +28,6 @@
 		"required": [
 			"ADMIN_PATH",
 			"ADMIN_SECRET",
-			"AUTH_PROXY_HOST",
 			"BARK_PUSH_URL",
 			"DINGTALK_SECRET",
 			"DINGTALK_WEBHOOK_URL",

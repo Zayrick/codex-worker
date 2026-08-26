@@ -9,7 +9,8 @@
 
 ## 必须保持的契约
 
-- 路由精确匹配；未知路径、错误方法和无效下游 Key 保持隐藏式空 `404`。
+- 本地、管理和公开协议路由精确匹配；已知路径的错误方法和无效下游 Key 保持隐藏式空 `404`；
+  `/backend-api` 路径族按代理账户许可策略透明转发，其他未注册路径透明转发到受信任 relay。
 - 图片、媒体和透明代理正文保持流式，不得无界缓冲。
 - 不记录、回显或向错误上游转发 OAuth、API Key、Cookie、管理密钥或请求正文。
 - `AUTH_KV` 只保存加密的主/代理 OAuth、API Key 与代理设置、Codex 用量状态；无迁移方案不得
@@ -21,9 +22,8 @@
 
 - 使用 pnpm 11、Node.js >=22、Rust >=1.97、`wasm32-unknown-unknown` 和 `worker-build` 0.8.5。
 - 固定绑定为 `ASSETS`、`AUTH_KV`；固定 secrets 为 `ADMIN_PATH`、`ADMIN_SECRET`、
-  `AUTH_PROXY_HOST`、`BARK_PUSH_URL`、`DINGTALK_SECRET`、`DINGTALK_WEBHOOK_URL`、
-  `CHATGPT_RELAY_URL`、`DATA_ENCRYPTION_KEY`；非 secret 为
-  `CORS_ORIGIN`；Cron 每 5 分钟执行。
+  `BARK_PUSH_URL`、`DINGTALK_SECRET`、`DINGTALK_WEBHOOK_URL`、`CHATGPT_RELAY_URL`、
+  `DATA_ENCRYPTION_KEY`；非 secret 为 `CORS_ORIGIN`；Cron 每 5 分钟执行。
 - 涉及 Workers、KV、Wrangler 配置或平台限制时，先查当前 Cloudflare 官方文档。
 - 不编辑或提交 `worker-rs/build/`、`worker-rs/target/`、`dist/`、`.wrangler/`、`.dev.vars`、
   `.env.production`。
