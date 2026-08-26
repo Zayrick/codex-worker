@@ -55,6 +55,31 @@ pub fn upstream_proxy(response: Response) -> worker::Result<Response> {
     apply_upstream_policy(response, http::upstream_proxy_response)
 }
 
+pub fn suppress_html_body(response: Response) -> worker::Result<Response> {
+    if response.status_code() == 101
+        || !response
+            .headers()
+            .get("content-type")?
+            .as_deref()
+            .is_some_and(http::is_html_content_type)
+    {
+        return Ok(response);
+    }
+    let policy = http::suppress_html_body(ResponseDto {
+        status: response.status_code(),
+        status_text: String::new(),
+        headers: headers_dto(response.headers()),
+        body: ResponseBodyDto::Passthrough,
+        websocket: false,
+        encode_body_manual: matches!(response.encode_body(), EncodeBody::Manual),
+    });
+    let (builder, _) = response.into_parts();
+    Ok(builder
+        .with_headers(worker_headers(&policy.headers)?)
+        .with_encode_body(EncodeBody::Automatic)
+        .empty())
+}
+
 fn apply_upstream_policy(
     response: Response,
     policy: impl FnOnce(ResponseDto) -> ResponseDto,

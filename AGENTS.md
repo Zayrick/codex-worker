@@ -12,6 +12,7 @@
 - 本地、管理和公开协议路由精确匹配；已知路径的错误方法和无效下游 Key 保持隐藏式空 `404`；
   `/backend-api` 路径族按代理账户许可策略透明转发，其他未注册路径透明转发到受信任 relay。
 - 图片、媒体和透明代理正文保持流式，不得无界缓冲。
+- HTML 只在 `GET /status/usage` 和精确的管理页面返回；其他 HTML/XHTML 响应清空正文。
 - 不记录、回显或向错误上游转发 OAuth、API Key、Cookie、管理密钥或请求正文。
 - `AUTH_KV` 只保存加密的主/代理 OAuth、API Key 与代理设置、Codex 用量状态；无迁移方案不得
   轮换 `DATA_ENCRYPTION_KEY`。

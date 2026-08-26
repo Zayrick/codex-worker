@@ -313,6 +313,33 @@ pub fn upstream_proxy_response(mut response: ResponseDto) -> ResponseDto {
 }
 
 #[must_use]
+pub fn suppress_html_body(mut response: ResponseDto) -> ResponseDto {
+    let is_html = response
+        .headers
+        .get("Content-Type")
+        .is_some_and(is_html_content_type);
+    if is_html && !response.websocket {
+        response.headers.remove("Content-Length");
+        response.headers.remove("Content-Encoding");
+        response.body = ResponseBodyDto::Empty;
+        response.encode_body_manual = false;
+    }
+    response
+}
+
+#[must_use]
+pub fn is_html_content_type(value: &str) -> bool {
+    value
+        .split(';')
+        .next()
+        .map(str::trim)
+        .is_some_and(|media_type| {
+            media_type.eq_ignore_ascii_case("text/html")
+                || media_type.eq_ignore_ascii_case("application/xhtml+xml")
+        })
+}
+
+#[must_use]
 pub fn chat_sse_response(source: Option<&HeadersDto>) -> ResponseDto {
     event_stream_response(source)
 }
@@ -427,6 +454,35 @@ mod tests {
         assert_eq!(response.headers.get("x-request-id"), Some("req_123"));
         assert_eq!(response.headers.get("cache-control"), Some("no-store"));
         assert!(response.encode_body_manual);
+    }
+
+    #[test]
+    fn suppresses_declared_html_without_changing_api_responses() {
+        let mut html = upstream(HeadersDto::from_pairs([
+            ("Content-Type", " Text/HTML ; charset=utf-8 "),
+            ("Content-Length", "1024"),
+            ("Content-Encoding", "gzip"),
+            ("X-Request-Id", "req_123"),
+        ]));
+        html.encode_body_manual = true;
+        let html = suppress_html_body(html);
+        assert_eq!(html.body, ResponseBodyDto::Empty);
+        assert!(!html.headers.contains("content-length"));
+        assert!(!html.headers.contains("content-encoding"));
+        assert_eq!(html.headers.get("x-request-id"), Some("req_123"));
+        assert!(!html.encode_body_manual);
+
+        let xhtml = suppress_html_body(upstream(HeadersDto::from_pairs([(
+            "Content-Type",
+            "application/xhtml+xml",
+        )])));
+        assert_eq!(xhtml.body, ResponseBodyDto::Empty);
+
+        let json = upstream(HeadersDto::from_pairs([(
+            "Content-Type",
+            "application/json",
+        )]));
+        assert_eq!(suppress_html_body(json.clone()), json);
     }
 
     #[test]

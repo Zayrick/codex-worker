@@ -181,7 +181,10 @@ Cloudflare 的请求、连接和 WebSocket 限制可能变化，请以当前
 - 公开协议 API 和管理响应使用 `Cache-Control: no-store`；透明转发保留上游响应
   header；
 - 公开协议 API 过滤客户端凭据、Cookie 和账户 ID；透明转发仅在 `/backend-api` 路径族按许可
-  配置处理认证 header，其他路径保持原始凭据。
+  配置处理认证 header，其他路径保持原始凭据；
+- 除 `GET /status/usage` 和精确的管理页面外，最终响应的 `Content-Type` 为 `text/html` 或
+  `application/xhtml+xml` 时保留状态与无关 header，移除正文长度、编码和正文。其他媒体类型
+  保持原始正文。
 
 默认 `CORS_ORIGIN` 为 `*`，当前配置只支持一个原样的 origin 值，不实现动态 allowlist，也不
 启用 credentialed CORS。

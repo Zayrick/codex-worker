@@ -2,8 +2,8 @@ use worker::{Context, Date, Env, Request, Response};
 
 use crate::{
     application::{
-        is_admin_path_family, is_known_api_path, match_admin_route, match_api_route,
-        match_status_route,
+        AdminRoute, StatusRoute, is_admin_path_family, is_known_api_path, match_admin_route,
+        match_api_route, match_status_route,
     },
     auth::{ApiKeyRepository, OAuthRepository, client_token},
     upstream::relay::is_backend_api_path,
@@ -20,17 +20,39 @@ use super::{
 };
 
 pub async fn handle_fetch(
-    mut request: Request,
+    request: Request,
     env: Env,
     context: Context,
 ) -> worker::Result<Response> {
     let url = request.url()?;
     let method = request.inner().method();
+    let preserve_html = matches!(
+        match_status_route(&method, url.path()),
+        Some(StatusRoute::Page)
+    ) || WorkerConfig::admin_path(&env).is_some_and(|admin_path| {
+        match_admin_route(&method, url.path(), &admin_path)
+            .is_some_and(|matched| matched.route == AdminRoute::Page)
+    });
+    let response = dispatch_fetch(request, url, method, &env, &context).await?;
+    if preserve_html {
+        Ok(response)
+    } else {
+        super::response::suppress_html_body(response)
+    }
+}
+
+async fn dispatch_fetch(
+    mut request: Request,
+    url: url::Url,
+    method: String,
+    env: &Env,
+    context: &Context,
+) -> worker::Result<Response> {
     let now_ms = i64::try_from(Date::now().as_millis()).unwrap_or(i64::MAX);
 
-    if let Some(admin_path) = WorkerConfig::admin_path(&env) {
+    if let Some(admin_path) = WorkerConfig::admin_path(env) {
         if let Some(matched) = match_admin_route(&method, url.path(), &admin_path) {
-            return handle_admin(matched, &mut request, &env, now_ms).await;
+            return handle_admin(matched, &mut request, env, now_ms).await;
         }
         if is_admin_path_family(url.path(), &admin_path) {
             return empty(404);
@@ -38,18 +60,18 @@ pub async fn handle_fetch(
     }
 
     if is_backend_api_path(url.path()) {
-        return handle_relay(request, url, &env, now_ms).await;
+        return handle_relay(request, url, env, now_ms).await;
     }
 
     if url.path() == "/healthz" {
         if method != "GET" {
             return empty(404);
         }
-        let encryption_key = match WorkerConfig::encryption_key(&env) {
+        let encryption_key = match WorkerConfig::encryption_key(env) {
             Ok(key) => key,
             Err(error) => return health_failure(&error),
         };
-        let store = match CloudflareSecretStore::from_env(&env) {
+        let store = match CloudflareSecretStore::from_env(env) {
             Ok(store) => store,
             Err(error) => return health_failure(&error),
         };
@@ -61,14 +83,14 @@ pub async fn handle_fetch(
     }
 
     if let Some(route) = match_status_route(&method, url.path()) {
-        return handle_status(route, &request, &env).await;
+        return handle_status(route, &request, env).await;
     }
     if matches!(url.path(), "/status/usage" | "/status/usage/data") {
         return empty(404);
     }
 
     if method == "OPTIONS" && is_known_api_path(url.path()) {
-        return with_cors(empty(204)?, &WorkerConfig::cors_origin(&env));
+        return with_cors(empty(204)?, &WorkerConfig::cors_origin(env));
     }
 
     let websocket = request
@@ -79,14 +101,14 @@ pub async fn handle_fetch(
         if is_known_api_path(url.path()) {
             return empty(404);
         }
-        return handle_relay(request, url, &env, now_ms).await;
+        return handle_relay(request, url, env, now_ms).await;
     };
 
-    let encryption_key = match WorkerConfig::encryption_key(&env) {
+    let encryption_key = match WorkerConfig::encryption_key(env) {
         Ok(key) => key,
         Err(_) => return empty(404),
     };
-    let store = match CloudflareSecretStore::from_env(&env) {
+    let store = match CloudflareSecretStore::from_env(env) {
         Ok(store) => store,
         Err(_) => return empty(404),
     };
@@ -104,9 +126,9 @@ pub async fn handle_fetch(
         return empty(404);
     }
 
-    let config = WorkerConfig::for_api_request(&env, encryption_key);
+    let config = WorkerConfig::for_api_request(env, encryption_key);
 
-    handle_api(route, request, url, &context, &config, &store).await
+    handle_api(route, request, url, context, &config, &store).await
 }
 
 fn health_failure(error: &crate::core::ApiError) -> worker::Result<Response> {

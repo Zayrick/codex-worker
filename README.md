@@ -13,6 +13,7 @@ OpenAI、Anthropic 和 Gemini 风格的接口。
 - 支持 JSON、SSE、WebSocket、multipart 与二进制流式传输；
 - 通过管理界面完成 Codex 设备授权、订阅额度查看、下游 API Key、代理账户许可和代理账户独立登录管理；
 - 公开协议 API 与透明转发共用同一 Worker Host；`/backend-api/*` 按 `account_id` 选择独立代理 OAuth、主 OAuth 回退或原认证透传，其他未注册路径保持原始凭据；
+- 仅公开用量页和隐藏管理页返回 HTML；其他声明为 HTML 或 XHTML 的响应保留状态与无关 header，但清空正文；
 - 使用 Workers KV 保存 OAuth 凭据、API Key 与 Codex 用量快照，并以 AES-256-GCM 加密；
 - 每 5 分钟采集 Codex 用量、分别刷新即将过期的主账户与代理账户 OAuth 凭据，并通过 Bark 与钉钉机器人提醒消耗进度变化和额度重置；
 - 在公开的 `/status/usage` 页面展示 KV 用量快照；时间轴从最早的当前配额周期开始，按各窗口周期向未来一周推算；

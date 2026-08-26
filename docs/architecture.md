@@ -195,6 +195,8 @@ API Key 与代理账户使用后端分配的 UUID 定位。缺少 `id` 的 `API_
 - 上游重定向使用手动模式，避免 OAuth 自动发送到未知目标；
 - 公开协议 API 应用凭据与响应 header 隔离；透明转发保留端到端 header，并由
   runtime 管理连接级 header；
+- 仅公开用量页和隐藏管理页允许 HTML；其他响应只根据 `Content-Type` 清空 HTML/XHTML 正文，
+  不读取或缓冲上游流；
 - 公开协议 API 和管理面使用 `Cache-Control: no-store`；透明转发保持上游响应
   语义。
 
