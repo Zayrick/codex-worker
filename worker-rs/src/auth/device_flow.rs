@@ -94,10 +94,9 @@ impl<'a> DeviceAuthorizationService<'a> {
             expires_at,
             interval,
         };
-        let state = serde_json::to_value(state)
-            .ok()
-            .and_then(|value| seal_json(&value, self.master_key, &self.state_purpose).ok())
-            .ok_or_else(device_session_unavailable)?;
+        let value = serde_json::to_value(state).map_err(|_| device_session_unavailable())?;
+        let state = seal_json(&value, self.master_key, &self.state_purpose)
+            .map_err(|_| device_session_unavailable())?;
 
         Ok(DeviceAuthorization {
             verification_uri: DEVICE_VERIFICATION_URL.into(),
@@ -156,33 +155,13 @@ fn device_state(sealed_state: &str, master_key: &str, purpose: &str) -> AppResul
 
 fn poll_interval(value: Option<&Value>) -> u64 {
     let parsed = match value {
-        Some(Value::Number(value)) => value
-            .as_f64()
-            .filter(|value| value.is_finite() && value.fract() == 0.0)
-            .and_then(|value| u64::try_from(value as i128).ok()),
-        Some(Value::String(value)) => parse_decimal_prefix(value),
+        Some(Value::Number(value)) => value.as_u64(),
+        Some(Value::String(value)) => value.trim().parse().ok(),
         _ => None,
     };
     parsed
         .filter(|value| (1..=60).contains(value))
         .unwrap_or(DEFAULT_POLL_INTERVAL_SECONDS)
-}
-
-fn parse_decimal_prefix(value: &str) -> Option<u64> {
-    let value = value.trim_start();
-    let (negative, value) = match value.as_bytes().first() {
-        Some(b'+') => (false, &value[1..]),
-        Some(b'-') => (true, &value[1..]),
-        _ => (false, value),
-    };
-    if negative {
-        return None;
-    }
-    let digits = value.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return None;
-    }
-    value[..digits].parse().ok()
 }
 
 fn device_session_unavailable() -> ApiError {
@@ -204,9 +183,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn matches_javascript_poll_interval_parsing() {
+    fn normalizes_provider_poll_interval() {
         assert_eq!(poll_interval(Some(&json!(1))), 1);
-        assert_eq!(poll_interval(Some(&json!("  +12seconds"))), 12);
+        assert_eq!(poll_interval(Some(&json!("12"))), 12);
         assert_eq!(poll_interval(Some(&json!(1.5))), 5);
         assert_eq!(poll_interval(Some(&json!("61"))), 5);
         assert_eq!(poll_interval(None), 5);

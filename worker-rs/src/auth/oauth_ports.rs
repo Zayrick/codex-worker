@@ -11,14 +11,8 @@ use crate::core::AppResult;
 
 use super::StoredOAuthCredentials;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OAuthHttpMethod {
-    Post,
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub struct OAuthHttpRequest {
-    pub method: OAuthHttpMethod,
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: String,
@@ -30,7 +24,6 @@ impl fmt::Debug for OAuthHttpRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("OAuthHttpRequest")
-            .field("method", &self.method)
             .field("url", &self.url)
             .field("headers", &self.headers)
             .field("body_bytes", &self.body.len())

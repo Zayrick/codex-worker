@@ -35,7 +35,8 @@ impl SecretStore for CloudflareSecretStore {
     }
 
     async fn put(&self, key: &str, value: &str) -> AppResult<()> {
-        for attempt in 0..3_u64 {
+        let mut attempt = 0_u64;
+        loop {
             let result = self
                 .kv
                 .put(key, value)
@@ -45,12 +46,12 @@ impl SecretStore for CloudflareSecretStore {
             match result {
                 Ok(()) => return Ok(()),
                 Err(error) if attempt < 2 && contains_http_status(&error.to_string(), "429") => {
-                    Delay::from(Duration::from_secs(attempt + 1)).await;
+                    attempt += 1;
+                    Delay::from(Duration::from_secs(attempt)).await;
                 }
                 Err(_) => return Err(storage_unavailable()),
             }
         }
-        Err(storage_unavailable())
     }
 
     async fn delete(&self, key: &str) -> AppResult<()> {

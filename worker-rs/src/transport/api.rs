@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use worker::{AbortSignal, Context, Date, Request, Response};
 
 use crate::{
-    application::{AdaptContext, AdapterRegistry, ApiRoute, Cl100kTokenCounter, ProtocolFamily},
+    application::{ApiRoute, Cl100kTokenCounter, ProtocolFamily},
     auth::OAuthRepository,
     core::{ApiError, AppResult},
     protocol::{anthropic, gemini},
@@ -70,8 +70,6 @@ async fn dispatch(
                 },
             )?;
             let counter = Cl100kTokenCounter;
-            // Fail explicitly before entering the infallible protocol port.
-            counter.count("")?;
             let count = anthropic::count_codex_input_tokens(&adapted.body, &counter);
             return json_response(&json!({ "input_tokens": count }), 200);
         }
@@ -143,20 +141,7 @@ async fn dispatch(
         | ApiRoute::Messages
         | ApiRoute::GeminiGenerate { .. }) => {
             let body = request_json(&mut request).await?;
-            let adapter_id = route.adapter_id().ok_or_else(runtime_failure)?;
-            let context_values = match &route {
-                ApiRoute::Messages => AdaptContext {
-                    require_max_tokens: true,
-                    ..AdaptContext::default()
-                },
-                ApiRoute::GeminiGenerate { model, stream } => AdaptContext {
-                    path_model: Some(model.clone()),
-                    stream: *stream,
-                    require_max_tokens: false,
-                },
-                _ => AdaptContext::default(),
-            };
-            let adapted = AdapterRegistry::builtins().adapt(adapter_id, &body, &context_values)?;
+            let adapted = route.adapter().ok_or_else(runtime_failure)?.adapt(&body)?;
             let signal = AbortSignal::from(request.inner().signal());
             let upstream = client
                 .send_converted_responses(&adapted.body, request_options(&request, &signal))

@@ -43,7 +43,7 @@ impl SseEvent {
             rendered.push('\n');
         }
         rendered.push_str("data: ");
-        rendered.push_str(&serde_json::to_string(&self.data).unwrap_or_else(|_| "null".into()));
+        rendered.push_str(&self.data.to_string());
         rendered.push_str("\n\n");
         rendered
     }

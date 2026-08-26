@@ -1,4 +1,4 @@
-//! Provider protocol adapters and their compile-time registry.
+//! Runtime-neutral provider protocol adapters.
 
 pub mod anthropic;
 pub mod gemini;

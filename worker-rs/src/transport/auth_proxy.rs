@@ -57,13 +57,16 @@ async fn dispatch_auth_proxy(
         let auth_proxy =
             OAuthRepository::for_auth_proxy_account(&store, &encryption_key, &account.id);
         let stored = auth_proxy_credentials_or_primary(&auth_proxy, &primary, now_ms).await?;
-        let account_id = stored
+        if stored
             .account_id
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(missing_oauth_account_id)?;
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(missing_oauth_account_id());
+        }
         Some(CodexCredentials {
-            token: stored.token,
-            account_id: Some(account_id),
+            token: stored.access_token,
+            account_id: stored.account_id,
         })
     } else {
         None

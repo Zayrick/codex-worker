@@ -4,10 +4,7 @@ use crate::{
 };
 use url::Url;
 
-use super::{
-    ANTHROPIC_MESSAGES_ADAPTER, CHAT_COMPLETIONS_ADAPTER, COMPLETIONS_ADAPTER,
-    GEMINI_CONTENT_ADAPTER,
-};
+use super::RequestAdapter;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolFamily {
@@ -46,12 +43,15 @@ impl ApiRoute {
         }
     }
 
-    pub const fn adapter_id(&self) -> Option<&'static str> {
+    pub fn adapter(&self) -> Option<RequestAdapter> {
         match self {
-            Self::ChatCompletions => Some(CHAT_COMPLETIONS_ADAPTER),
-            Self::Completions => Some(COMPLETIONS_ADAPTER),
-            Self::Messages => Some(ANTHROPIC_MESSAGES_ADAPTER),
-            Self::GeminiGenerate { .. } => Some(GEMINI_CONTENT_ADAPTER),
+            Self::ChatCompletions => Some(RequestAdapter::OpenAiChat),
+            Self::Completions => Some(RequestAdapter::OpenAiCompletion),
+            Self::Messages => Some(RequestAdapter::AnthropicMessages),
+            Self::GeminiGenerate { model, stream } => Some(RequestAdapter::GeminiContent {
+                model: model.clone(),
+                stream: *stream,
+            }),
             _ => None,
         }
     }

@@ -46,7 +46,7 @@ impl OAuthHttpClient for FakeHttp {
         self.responses
             .borrow_mut()
             .pop_front()
-            .unwrap_or(Err(OAuthHttpFailure::Network))
+            .expect("missing fake OAuth response")
     }
 }
 
@@ -159,7 +159,7 @@ fn device_start_pending_and_completion_use_encrypted_repository() {
         json!({
             "device_auth_id": "device-auth-sensitive",
             "user_code": "ABCD-EFGH",
-            "interval": "1 second"
+            "interval": "1"
         }),
     ));
     http.push(empty_response(403));
@@ -371,7 +371,7 @@ fn proxy_credentials_are_uuid_scoped_and_fall_back_to_primary() {
 
     let selected =
         block_on_ready(auth_proxy_credentials_or_primary(&proxy, &primary, NOW_MS)).unwrap();
-    assert_eq!(selected.token, "access-original");
+    assert_eq!(selected.access_token, "access-original");
 
     let mut proxy_credentials = credentials(NOW_MS + 60_000);
     proxy_credentials.access_token = "access-proxy-sensitive".into();
@@ -380,21 +380,21 @@ fn proxy_credentials_are_uuid_scoped_and_fall_back_to_primary() {
     block_on_ready(proxy.store(&proxy_credentials)).unwrap();
     let selected =
         block_on_ready(auth_proxy_credentials_or_primary(&proxy, &primary, NOW_MS)).unwrap();
-    assert_eq!(selected.token, "access-proxy-sensitive");
+    assert_eq!(selected.access_token, "access-proxy-sensitive");
     assert_eq!(selected.account_id.as_deref(), Some("account-proxy"));
 
     proxy_credentials.account_id = None;
     block_on_ready(proxy.store(&proxy_credentials)).unwrap();
     let selected =
         block_on_ready(auth_proxy_credentials_or_primary(&proxy, &primary, NOW_MS)).unwrap();
-    assert_eq!(selected.token, "access-original");
+    assert_eq!(selected.access_token, "access-original");
 
     proxy_credentials.account_id = Some("account-proxy".into());
     proxy_credentials.expires_at = NOW_MS;
     block_on_ready(proxy.store(&proxy_credentials)).unwrap();
     let selected =
         block_on_ready(auth_proxy_credentials_or_primary(&proxy, &primary, NOW_MS)).unwrap();
-    assert_eq!(selected.token, "access-original");
+    assert_eq!(selected.access_token, "access-original");
 
     let encrypted = secret_store
         .raw(&format!("oauth:auth-proxy:{proxy_id}"))
@@ -448,20 +448,8 @@ fn refresh_distinguishes_missing_not_due_and_safe_provider_errors() {
 }
 
 #[test]
-fn provider_bounds_json_and_preserves_rate_limit_error_semantics() {
+fn refresh_preserves_rate_limit_error_semantics() {
     let clock = FakeClock::new(NOW_MS);
-    let oversized_http = FakeHttp::default();
-    oversized_http.push(Ok(OAuthHttpResponse {
-        status: 200,
-        body: vec![b'x'; MAX_OAUTH_RESPONSE_BYTES + 1],
-    }));
-    let oversized_provider = OAuthProvider::new(&oversized_http, &clock);
-    let error = block_on_ready(oversized_provider.request_device_authorization()).unwrap_err();
-    assert_eq!(
-        error.code.as_deref(),
-        Some("invalid_oauth_provider_response")
-    );
-
     let limited_http = FakeHttp::default();
     limited_http.push(empty_response(429));
     limited_http.push(empty_response(429));

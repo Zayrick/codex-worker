@@ -32,8 +32,6 @@ impl<'a> CodexUsageStateRepository<'a> {
 
     pub async fn store(&self, state: &CodexUsageMonitorState) -> AppResult<()> {
         let value = serde_json::to_value(state).map_err(|_| invalid_stored_usage_state())?;
-        let validated = validate_codex_usage_monitor_state(value)?;
-        let value = serde_json::to_value(validated).map_err(|_| invalid_stored_usage_state())?;
         let encrypted = seal_json(&value, self.master_key, CODEX_USAGE_ENVELOPE_PURPOSE)
             .map_err(|_| invalid_stored_usage_state())?;
         if encrypted.len() > MAX_CODEX_USAGE_ENVELOPE_CHARS {

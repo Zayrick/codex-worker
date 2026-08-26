@@ -1,7 +1,6 @@
 use worker::{AbortSignal, Fetch, Headers, Method, Request, RequestInit, RequestRedirect};
 
 use crate::{
-    application::UsageNotification,
     core::AppResult,
     upstream::dingtalk::{
         DINGTALK_MAX_RESPONSE_BYTES, DINGTALK_REQUEST_TIMEOUT_MS, DingTalkResponse,
@@ -21,13 +20,13 @@ impl DingTalkClient {
         Self { webhook, secret }
     }
 
-    pub async fn send(&self, notification: &UsageNotification, timestamp_ms: i64) -> AppResult<()> {
+    pub async fn send(&self, body: &str, timestamp_ms: i64) -> AppResult<()> {
         let endpoint = signed_dingtalk_webhook(&self.webhook, &self.secret, timestamp_ms)?;
         let headers = Headers::new();
         headers
             .set("content-type", "application/json; charset=utf-8")
             .map_err(|_| dingtalk_unavailable())?;
-        let payload = dingtalk_notification_payload(&notification.title, &notification.body);
+        let payload = dingtalk_notification_payload(body);
         let body = serde_json::to_string(&payload).map_err(|_| dingtalk_unavailable())?;
         let mut init = RequestInit::new();
         init.with_method(Method::Post)

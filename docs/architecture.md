@@ -59,15 +59,14 @@ transport ──→ application ──→ protocol ──→ core
 | 模块 | 职责 | 约束 |
 | --- | --- | --- |
 | `core` | 通用错误和 JSON 基础类型 | 不依赖业务模块或 Cloudflare runtime |
-| `http` | 有界正文、响应 DTO 和 SSE 编码 | 使用 runtime-neutral 类型 |
+| `http` | 有界正文和响应 DTO | 使用 runtime-neutral 类型 |
 | `protocol` | OpenAI、Anthropic、Gemini 的请求与响应转换 | 不发起网络请求，不访问绑定 |
 | `auth` | OAuth、API Key、会话、加密和存储抽象 | 通过窄接口访问时钟、HTTP 和持久化 |
-| `upstream` | Codex 与 Backend API 代理的 URL、header、模型和订阅数据策略 | 保持纯策略逻辑，可独立测试 |
-| `application` | 路由模型、adapter registry、tokenizer 与用量告警状态机 | 编排协议能力，不执行 Cloudflare I/O |
+| `upstream` | Codex 与 Backend API 代理的 URL、header、模型和订阅数据策略 | 仅处理 runtime-neutral 数据 |
+| `application` | 路由模型、请求 adapter、tokenizer 与用量告警状态机 | 编排协议能力，不执行 Cloudflare I/O |
 | `transport` | Workers Request/Response、KV、Fetch、Bark、钉钉机器人、Assets、流和 WebSocket | 唯一 Cloudflare I/O 边界 |
 
-`lib.rs` 是事件组合入口。仅 `wasm32` 构建导出 `fetch` 和 `scheduled` 事件，因而内部模块可以
-直接在宿主目标运行单元测试。
+`lib.rs` 是事件组合入口。仅 `wasm32` 构建导出 `fetch` 和 `scheduled` 事件。
 
 ## 4. 前端边界
 
@@ -153,9 +152,9 @@ GET /status/usage
 
 ### 5.5 定时维护
 
-`scheduled` 事件每 5 分钟运行一次。每次运行会通过受信任 relay 获取 Codex 用量，计算每个
-Codex 额度窗口的额度剩余百分比、剩余毫秒数和剩余时间百分比，然后把当前快照与百分比关系状态加密
-写入 KV。用量请求、Bark 请求和钉钉机器人请求均限制为 10 秒且不跟随重定向；Bark 响应正文
+`scheduled` 事件每 5 分钟运行一次。每次运行会通过受信任 relay 获取 Codex 用量，根据额度
+剩余百分比、重置时间和窗口周期判断消耗进度，并把当前快照与提醒状态加密写入 KV。用量请求、
+Bark 请求和钉钉机器人请求均限制为 10 秒且不跟随重定向；Bark 响应正文
 直接丢弃，钉钉响应正文最多读取 64 KiB 并校验 `errcode`。
 
 告警按单个 Codex 额度窗口判断，并把同一轮的多项提醒合并后分别向 Bark 与钉钉机器人推送一次：
@@ -183,7 +182,7 @@ access token 将在三小时内过期时才调用 OpenAI token endpoint；代理
 | `oauth` | access token、refresh token、账户信息和过期时间 | AES-256-GCM envelope |
 | `oauth:auth-proxy:<uuid>` | 单个代理账户的独立 access token、refresh token、账户信息和过期时间 | 按 UUID 绑定 purpose 的 AES-256-GCM envelope |
 | `API_KEYS` | 下游 API Key 和 Backend API 代理账户及其记录 ID | AES-256-GCM envelope |
-| `CODEX_USAGE` | 最近一次用量快照、剩余时间和告警状态 | AES-256-GCM envelope |
+| `CODEX_USAGE` | 最近一次用量快照和提醒状态 | AES-256-GCM envelope |
 
 设备授权 state 和管理会话不写入 KV，而是使用独立 purpose 加密后交由客户端保存。所有 envelope
 由 `DATA_ENCRYPTION_KEY` 派生同一 AES-256-GCM 密钥，并通过不同的附加认证数据隔离用途。

@@ -88,7 +88,7 @@ impl<'a> ApiKeyRepository<'a> {
         Ok(state)
     }
 
-    pub async fn store(&self, keys: &[ClientApiKey]) -> AppResult<Vec<ClientApiKey>> {
+    async fn store(&self, keys: &[ClientApiKey]) -> AppResult<Vec<ClientApiKey>> {
         let auth_proxy_accounts = self.read_auth_proxy_accounts().await?;
         Ok(self.store_state(keys, auth_proxy_accounts).await?.keys)
     }
@@ -96,19 +96,14 @@ impl<'a> ApiKeyRepository<'a> {
     async fn store_state(
         &self,
         keys: &[ClientApiKey],
-        auth_proxy_accounts: Vec<AuthProxyAccount>,
+        mut auth_proxy_accounts: Vec<AuthProxyAccount>,
     ) -> AppResult<ApiKeyState> {
-        let validated = validate_api_key_collection(
-            keys.iter().cloned(),
-            self.master_key,
-            false,
-            invalid_stored_api_keys,
-        )?
-        .0;
-        let auth_proxy_accounts =
-            validate_stored_auth_proxy_accounts(auth_proxy_accounts, self.master_key)?.0;
+        let mut keys = keys.to_vec();
+        keys.sort_by(|left, right| left.name.encode_utf16().cmp(right.name.encode_utf16()));
+        auth_proxy_accounts
+            .sort_by(|left, right| left.name.encode_utf16().cmp(right.name.encode_utf16()));
         let state = ApiKeyState {
-            keys: validated,
+            keys,
             auth_proxy_accounts,
         };
         self.write_state(&state).await?;
@@ -294,10 +289,22 @@ pub fn validate_api_key_input(value: &Value) -> AppResult<ClientApiKey> {
 
 fn validate_api_key_with_id(value: &Value, id: String) -> AppResult<ClientApiKey> {
     let object = value.as_object().ok_or_else(invalid_api_key_record)?;
-    let name = validate_api_key_name(object.get("name").and_then(Value::as_str))?;
-    let key = object
-        .get("key")
-        .and_then(Value::as_str)
+    validate_api_key_fields(
+        id,
+        object.get("name").and_then(Value::as_str),
+        object.get("key").and_then(Value::as_str),
+        object.get("enabled").and_then(Value::as_bool),
+    )
+}
+
+fn validate_api_key_fields(
+    id: String,
+    name: Option<&str>,
+    key: Option<&str>,
+    enabled: Option<bool>,
+) -> AppResult<ClientApiKey> {
+    let name = validate_api_key_name(name)?;
+    let key = key
         .filter(|key| {
             let len = utf16_len(key);
             (MIN_API_KEY_LENGTH..=MAX_API_KEY_LENGTH).contains(&len)
@@ -308,10 +315,7 @@ fn validate_api_key_with_id(value: &Value, id: String) -> AppResult<ClientApiKey
                 })
         })
         .ok_or_else(invalid_api_key_record)?;
-    let enabled = object
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .ok_or_else(invalid_api_key_record)?;
+    let enabled = enabled.ok_or_else(invalid_api_key_record)?;
     Ok(ClientApiKey {
         id,
         name,
@@ -329,8 +333,7 @@ fn validate_stored_api_keys(value: Value, master_key: &str) -> AppResult<(ApiKey
     ) {
         return Err(invalid_stored_api_keys());
     }
-    let (keys, keys_upgraded) =
-        validate_api_key_collection(stored.keys, master_key, true, invalid_stored_api_keys)?;
+    let (keys, keys_upgraded) = validate_stored_api_key_collection(stored.keys, master_key)?;
     let (auth_proxy_accounts, accounts_upgraded) =
         validate_stored_auth_proxy_accounts(stored.auth_proxy_accounts, master_key)?;
     Ok((
@@ -342,15 +345,13 @@ fn validate_stored_api_keys(value: Value, master_key: &str) -> AppResult<(ApiKey
     ))
 }
 
-fn validate_api_key_collection(
+fn validate_stored_api_key_collection(
     values: impl IntoIterator<Item = ClientApiKey>,
     master_key: &str,
-    allow_missing_ids: bool,
-    error: fn() -> ApiError,
 ) -> AppResult<(Vec<ClientApiKey>, bool)> {
     let values: Vec<_> = values.into_iter().collect();
     if values.len() > MAX_API_KEYS {
-        return Err(error());
+        return Err(invalid_stored_api_keys());
     }
     let mut ids = HashSet::new();
     let mut names = HashSet::new();
@@ -358,22 +359,22 @@ fn validate_api_key_collection(
     let mut validated = Vec::with_capacity(values.len());
     let mut upgraded = false;
     for value in values {
-        let id = if value.id.is_empty() && allow_missing_ids {
+        let id = if value.id.is_empty() {
             upgraded = true;
             derived_record_id(master_key, "api-key", &value.name)
         } else if valid_record_id(&value.id) {
             value.id.clone()
         } else {
-            return Err(error());
+            return Err(invalid_stored_api_keys());
         };
         let normalized =
-            validate_api_key_with_id(&serde_json::to_value(value).map_err(|_| error())?, id)
-                .map_err(|_| error())?;
+            validate_api_key_fields(id, Some(&value.name), Some(&value.key), Some(value.enabled))
+                .map_err(|_| invalid_stored_api_keys())?;
         if !ids.insert(normalized.id.clone())
             || !names.insert(normalized.name.clone())
             || !keys.insert(normalized.key.clone())
         {
-            return Err(error());
+            return Err(invalid_stored_api_keys());
         }
         validated.push(normalized);
     }

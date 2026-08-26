@@ -15,12 +15,6 @@ const AUTH_PROXY_OAUTH_ENVELOPE_PURPOSE_PREFIX: &str = "codex-worker/oauth/auth-
 const DEFAULT_TOKEN_LIFETIME_MS: i64 = 55 * 60 * 1_000;
 const MAX_OAUTH_ENVELOPE_CHARS: usize = 128 * 1_024;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodexCredentials {
-    pub token: String,
-    pub account_id: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredOAuthCredentials {
@@ -88,8 +82,6 @@ impl<'a> OAuthRepository<'a> {
 
     pub async fn store(&self, credentials: &StoredOAuthCredentials) -> AppResult<()> {
         let value = serde_json::to_value(credentials).map_err(|_| invalid_stored_credentials())?;
-        let validated = validate_stored_credentials(value)?;
-        let value = serde_json::to_value(validated).map_err(|_| invalid_stored_credentials())?;
         let encrypted = seal_json(&value, self.master_key, &self.envelope_purpose)
             .map_err(|_| invalid_stored_credentials())?;
         self.store.put(&self.storage_key, &encrypted).await
@@ -128,28 +120,14 @@ impl<'a> OAuthRepository<'a> {
         Ok(credentials)
     }
 
-    pub async fn codex_credentials(&self, now_ms: i64) -> AppResult<CodexCredentials> {
-        let credentials = self.require_valid(now_ms).await?;
-        Ok(CodexCredentials {
-            token: credentials.access_token,
-            account_id: credentials.account_id,
-        })
-    }
-
-    pub async fn valid_codex_credentials(
-        &self,
-        now_ms: i64,
-    ) -> AppResult<Option<CodexCredentials>> {
+    async fn valid_credentials(&self, now_ms: i64) -> AppResult<Option<StoredOAuthCredentials>> {
         let Some(credentials) = self.read().await? else {
             return Ok(None);
         };
         if credentials.expires_at <= now_ms {
             return Ok(None);
         }
-        Ok(Some(CodexCredentials {
-            token: credentials.access_token,
-            account_id: credentials.account_id,
-        }))
+        Ok(Some(credentials))
     }
 }
 
@@ -157,8 +135,8 @@ pub async fn auth_proxy_credentials_or_primary(
     auth_proxy: &OAuthRepository<'_>,
     primary: &OAuthRepository<'_>,
     now_ms: i64,
-) -> AppResult<CodexCredentials> {
-    if let Some(credentials) = auth_proxy.valid_codex_credentials(now_ms).await?
+) -> AppResult<StoredOAuthCredentials> {
+    if let Some(credentials) = auth_proxy.valid_credentials(now_ms).await?
         && credentials
             .account_id
             .as_deref()
@@ -167,7 +145,7 @@ pub async fn auth_proxy_credentials_or_primary(
     {
         return Ok(credentials);
     }
-    primary.codex_credentials(now_ms).await
+    primary.require_valid(now_ms).await
 }
 
 #[async_trait(?Send)]

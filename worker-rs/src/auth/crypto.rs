@@ -26,7 +26,7 @@ struct EncryptedEnvelope {
     ciphertext: String,
 }
 
-/// Seal JSON in the exact v1 envelope used by the former TypeScript Worker.
+/// Seals JSON in the version 1 storage envelope.
 pub fn seal_json(
     value: &Value,
     encoded_master_key: &str,
@@ -132,7 +132,7 @@ mod tests {
     const OAUTH_FIXTURE: &str = "{\"v\":1,\"alg\":\"A256GCM\",\"iv\":\"AAECAwQFBgcICQoL\",\"ciphertext\":\"Y6OfFW96sCYZkN-tznoNmYJZxf1MDRxUeOxZmOi-FXGrHSPP9qxSmIeW4Zp-hdBVhlUvEYC6j_MfbY6uxqljuzg9ZpHoNn7iTUbPnh2tTvraO7m7NXxTwZrtSSZmASZ1j8AkLz4YMnOtWzdmEGoFxu8sXb3t3mbSV3ZogLMHoCxz4DvqAY89KsydwolZyIlwoV9wTPp8VEA4SXjUOWk\"}";
 
     #[test]
-    fn decrypts_the_typescript_v1_fixture() {
+    fn decrypts_v1_fixture() {
         let value = open_json(OAUTH_FIXTURE, KEY, "codex-worker/oauth/v1").unwrap();
         assert_eq!(value["accessToken"], "fixture-access");
         assert_eq!(value["refreshToken"], "fixture-refresh");

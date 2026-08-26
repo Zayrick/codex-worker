@@ -110,7 +110,7 @@ pub fn gemini_count_tokens<C: TokenCounter + ?Sized>(
     counter: &C,
 ) -> AppResult<Value> {
     let adapted = gemini_count_request(input, model)?;
-    Ok(json!({ "totalTokens": counter.count_tokens(&adapted.body)? }))
+    Ok(json!({ "totalTokens": counter.count_tokens(&adapted.body) }))
 }
 
 fn append_system_instruction(output: &mut Vec<Value>, input: &JsonObject) -> AppResult<()> {
@@ -252,7 +252,7 @@ fn append_contents(
                 let arguments = call
                     .get("args")
                     .filter(|value| !value.is_null())
-                    .map(|value| serde_json::to_string(value).unwrap_or_else(|_| "{}".into()))
+                    .map(Value::to_string)
                     .unwrap_or_else(|| "{}".into());
                 output.push(json!({
                     "type": "function_call",
@@ -630,7 +630,7 @@ fn output_string(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
         Value::String(value) => value.clone(),
-        value => serde_json::to_string(value).unwrap_or_default(),
+        value => value.to_string(),
     }
 }
 

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -18,7 +16,7 @@ const MAX_PLAN_TYPE_CHARS: usize = 128;
 const GRACE_USAGE_EQUIVALENT_SECONDS: f64 = 12.0 * 60.0 * 60.0;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct CodexUsageMonitorState {
     pub version: u8,
     pub sampled_at: i64,
@@ -28,7 +26,7 @@ pub struct CodexUsageMonitorState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct MonitoredQuotaWindow {
     pub id: String,
     pub category: CodexQuotaCategory,
@@ -42,28 +40,23 @@ pub struct MonitoredQuotaWindow {
     pub limit_window_seconds: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset_at: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remaining_time_ms: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remaining_time_percent: Option<f64>,
-    pub quota_below_time: bool,
     pub entry_alert_sent: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UsageAlertKind {
+enum UsageAlertKind {
     ConsumptionTooFast,
     ConsumptionRecovered,
     QuotaReset,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct UsageAlert {
-    pub kind: UsageAlertKind,
-    pub window_kind: CodexQuotaWindowKind,
-    pub remaining_percent: Option<f64>,
-    pub remaining_time_percent: Option<f64>,
-    pub previous_remaining_percent: Option<f64>,
+struct UsageAlert {
+    kind: UsageAlertKind,
+    window_kind: CodexQuotaWindowKind,
+    remaining_percent: Option<f64>,
+    remaining_time_percent: Option<f64>,
+    previous_remaining_percent: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,7 +68,7 @@ pub struct UsageNotification {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodexUsageMonitorEvaluation {
     pub state: CodexUsageMonitorState,
-    pub alerts: Vec<UsageAlert>,
+    alerts: Vec<UsageAlert>,
 }
 
 impl CodexUsageMonitorEvaluation {
@@ -112,7 +105,7 @@ pub fn evaluate_codex_usage(
             .windows
             .iter()
             .take(MAX_WINDOWS)
-            .map(|window| snapshot(window, now_ms))
+            .map(snapshot)
             .collect(),
     };
     let mut alerts = Vec::new();
@@ -121,38 +114,41 @@ pub fn evaluate_codex_usage(
         if current.category != CodexQuotaCategory::Codex {
             continue;
         }
+        let current_relation = quota_time_relation(current, now_ms);
         let prior = previous.and_then(|state| {
             state
                 .windows
                 .iter()
                 .find(|candidate| candidate.id == current.id)
+                .map(|window| (window, state.sampled_at))
         });
         if current.kind != CodexQuotaWindowKind::FiveHour
             && let (Some(previous_remaining), Some(current_remaining)) = (
-                prior.and_then(|prior| prior.remaining_percent),
+                prior.and_then(|(prior, _)| prior.remaining_percent),
                 current.remaining_percent,
             )
             && current_remaining > previous_remaining
         {
-            alerts.push(reset_alert(current, previous_remaining));
+            alerts.push(reset_alert(current, previous_remaining, now_ms));
         }
-        let Some(prior) = prior else {
-            current.entry_alert_sent =
-                current.quota_below_time && !is_within_initial_usage_allowance(current);
+        let Some((prior, prior_sampled_at)) = prior else {
+            current.entry_alert_sent = current_relation == Some(QuotaTimeRelation::Below)
+                && !is_within_initial_usage_allowance(current);
             continue;
         };
-        if current.quota_below_time {
-            if prior.quota_below_time && prior.entry_alert_sent {
+        let prior_relation = quota_time_relation(prior, prior_sampled_at);
+        if current_relation == Some(QuotaTimeRelation::Below) {
+            if prior_relation == Some(QuotaTimeRelation::Below) && prior.entry_alert_sent {
                 current.entry_alert_sent = true;
             } else if !is_within_initial_usage_allowance(current) {
-                alerts.push(alert(current, UsageAlertKind::ConsumptionTooFast));
+                alerts.push(alert(current, UsageAlertKind::ConsumptionTooFast, now_ms));
                 current.entry_alert_sent = true;
             }
         }
         if let (Some(QuotaTimeRelation::Below), Some(QuotaTimeRelation::Above)) =
-            (quota_time_relation(prior), quota_time_relation(current))
+            (prior_relation, current_relation)
         {
-            alerts.push(alert(current, UsageAlertKind::ConsumptionRecovered));
+            alerts.push(alert(current, UsageAlertKind::ConsumptionRecovered, now_ms));
         }
     }
 
@@ -162,36 +158,20 @@ pub fn evaluate_codex_usage(
 pub fn validate_codex_usage_monitor_state(value: Value) -> AppResult<CodexUsageMonitorState> {
     let state: CodexUsageMonitorState =
         serde_json::from_value(value).map_err(|_| invalid_stored_usage_state())?;
-    if state.version != STATE_VERSION || !valid_state_header(&state) {
+    if state.version != STATE_VERSION || state.sampled_at <= 0 || state.windows.len() > MAX_WINDOWS
+    {
         return Err(invalid_stored_usage_state());
-    }
-    let mut ids = HashSet::new();
-    for window in &state.windows {
-        if !valid_window(window, &mut ids) {
-            return Err(invalid_stored_usage_state());
-        }
     }
     Ok(state)
 }
 
-fn snapshot(window: &CodexQuotaWindow, now_ms: i64) -> MonitoredQuotaWindow {
+fn snapshot(window: &CodexQuotaWindow) -> MonitoredQuotaWindow {
     let used_percent = normalized_percent(window.used_percent);
     let remaining_percent = normalized_percent(window.remaining_percent);
     let limit_window_seconds = window
         .limit_window_seconds
         .filter(|value| value.is_finite() && *value > 0.0);
     let reset_at = window.reset_at.and_then(timestamp_ms);
-    let remaining_time_ms = reset_at.map(|reset_at| reset_at.saturating_sub(now_ms).max(0));
-    let remaining_time_percent = remaining_time_ms
-        .zip(limit_window_seconds.and_then(seconds_to_ms))
-        .map(|(remaining, duration)| {
-            (remaining as f64 / duration as f64 * 100.0).clamp(0.0, 100.0)
-        });
-    let quota_below_time = window.category == CodexQuotaCategory::Codex
-        && matches!(
-            (remaining_percent, remaining_time_percent),
-            (Some(quota), Some(time)) if quota < time
-        );
     MonitoredQuotaWindow {
         id: bounded_chars(&window.id, MAX_ID_CHARS),
         category: window.category,
@@ -201,29 +181,30 @@ fn snapshot(window: &CodexQuotaWindow, now_ms: i64) -> MonitoredQuotaWindow {
         remaining_percent,
         limit_window_seconds,
         reset_at,
-        remaining_time_ms,
-        remaining_time_percent,
-        quota_below_time,
         entry_alert_sent: false,
     }
 }
 
-fn alert(window: &MonitoredQuotaWindow, kind: UsageAlertKind) -> UsageAlert {
+fn alert(window: &MonitoredQuotaWindow, kind: UsageAlertKind, sampled_at: i64) -> UsageAlert {
     UsageAlert {
         kind,
         window_kind: window.kind,
         remaining_percent: window.remaining_percent,
-        remaining_time_percent: window.remaining_time_percent,
+        remaining_time_percent: remaining_time_percent(window, sampled_at),
         previous_remaining_percent: None,
     }
 }
 
-fn reset_alert(window: &MonitoredQuotaWindow, previous_remaining_percent: f64) -> UsageAlert {
+fn reset_alert(
+    window: &MonitoredQuotaWindow,
+    previous_remaining_percent: f64,
+    sampled_at: i64,
+) -> UsageAlert {
     UsageAlert {
         kind: UsageAlertKind::QuotaReset,
         window_kind: window.kind,
         remaining_percent: window.remaining_percent,
-        remaining_time_percent: window.remaining_time_percent,
+        remaining_time_percent: remaining_time_percent(window, sampled_at),
         previous_remaining_percent: Some(previous_remaining_percent),
     }
 }
@@ -234,12 +215,24 @@ enum QuotaTimeRelation {
     Below,
 }
 
-fn quota_time_relation(window: &MonitoredQuotaWindow) -> Option<QuotaTimeRelation> {
-    match (window.remaining_percent, window.remaining_time_percent) {
+fn quota_time_relation(
+    window: &MonitoredQuotaWindow,
+    sampled_at: i64,
+) -> Option<QuotaTimeRelation> {
+    match (
+        window.remaining_percent,
+        remaining_time_percent(window, sampled_at),
+    ) {
         (Some(quota), Some(time)) if quota > time => Some(QuotaTimeRelation::Above),
         (Some(quota), Some(time)) if quota < time => Some(QuotaTimeRelation::Below),
         _ => None,
     }
+}
+
+fn remaining_time_percent(window: &MonitoredQuotaWindow, sampled_at: i64) -> Option<f64> {
+    let remaining = window.reset_at?.saturating_sub(sampled_at).max(0);
+    let duration = seconds_to_ms(window.limit_window_seconds?)?;
+    Some((remaining as f64 / duration as f64 * 100.0).clamp(0.0, 100.0))
 }
 
 fn is_within_initial_usage_allowance(window: &MonitoredQuotaWindow) -> bool {
@@ -256,36 +249,6 @@ fn is_within_initial_usage_allowance(window: &MonitoredQuotaWindow) -> bool {
     used_percent <= allowance_percent
 }
 
-fn valid_state_header(state: &CodexUsageMonitorState) -> bool {
-    state.sampled_at > 0
-        && state.windows.len() <= MAX_WINDOWS
-        && state
-            .plan_type
-            .as_deref()
-            .is_none_or(|value| !value.is_empty() && value.chars().count() <= MAX_PLAN_TYPE_CHARS)
-}
-
-fn valid_window<'a>(window: &'a MonitoredQuotaWindow, ids: &mut HashSet<&'a str>) -> bool {
-    !window.id.is_empty()
-        && window.id.chars().count() <= MAX_ID_CHARS
-        && ids.insert(window.id.as_str())
-        && !window.name.is_empty()
-        && window.name.chars().count() <= MAX_NAME_CHARS
-        && valid_percent(window.used_percent)
-        && valid_percent(window.remaining_percent)
-        && valid_positive(window.limit_window_seconds)
-        && window.reset_at.is_none_or(|value| value > 0)
-        && window.remaining_time_ms.is_none_or(|value| value >= 0)
-        && valid_percent(window.remaining_time_percent)
-        && window.quota_below_time
-            == (window.category == CodexQuotaCategory::Codex
-                && matches!(
-                    (window.remaining_percent, window.remaining_time_percent),
-                    (Some(quota), Some(time)) if quota < time
-                ))
-        && (!window.entry_alert_sent || window.quota_below_time)
-}
-
 fn normalized_percent(value: Option<f64>) -> Option<f64> {
     value
         .filter(|value| value.is_finite())
@@ -300,14 +263,6 @@ fn seconds_to_ms(value: f64) -> Option<i64> {
     let milliseconds = value * 1_000.0;
     (milliseconds.is_finite() && milliseconds > 0.0 && milliseconds <= i64::MAX as f64)
         .then_some(milliseconds as i64)
-}
-
-fn valid_percent(value: Option<f64>) -> bool {
-    value.is_none_or(|value| value.is_finite() && (0.0..=100.0).contains(&value))
-}
-
-fn valid_positive(value: Option<f64>) -> bool {
-    value.is_none_or(|value| value.is_finite() && value > 0.0)
 }
 
 fn bounded_chars(value: &str, max_chars: usize) -> String {
@@ -371,8 +326,6 @@ fn invalid_stored_usage_state() -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
     use crate::upstream::codex::CodexRateLimitResetCredits;
 
@@ -539,56 +492,5 @@ mod tests {
             NOW_MS + 4 * FIVE_MINUTES_MS,
         );
         assert!(still_below.alerts.is_empty());
-    }
-
-    #[test]
-    fn accepts_stored_state_with_time_percentages() {
-        let stored = json!({
-            "version": 1,
-            "sampledAt": NOW_MS,
-            "planType": "pro",
-            "windows": [{
-                "id": "codex-weekly-0",
-                "category": "codex",
-                "name": "Codex",
-                "kind": "weekly",
-                "usedPercent": 60.0,
-                "remainingPercent": 40.0,
-                "limitWindowSeconds": 604800.0,
-                "resetAt": NOW_MS + 1,
-                "remainingTimeMs": 1,
-                "remainingTimePercent": 50.0,
-                "quotaBelowTime": true,
-                "entryAlertSent": true
-            }]
-        });
-        let state = validate_codex_usage_monitor_state(stored).unwrap();
-        assert_eq!(state.version, STATE_VERSION);
-        assert_eq!(state.windows[0].remaining_time_percent, Some(50.0));
-        assert!(state.windows[0].quota_below_time);
-    }
-
-    #[test]
-    fn stored_state_validation_rejects_an_inconsistent_relation() {
-        let value = json!({
-            "version": 1,
-            "sampledAt": NOW_MS,
-            "planType": "pro",
-            "windows": [{
-                "id": "codex-weekly-0",
-                "category": "codex",
-                "name": "Codex",
-                "kind": "weekly",
-                "usedPercent": 94.0,
-                "remainingPercent": 6.0,
-                "remainingTimePercent": 7.0,
-                "remainingTimeMs": 42336000,
-                "limitWindowSeconds": 604800.0,
-                "resetAt": NOW_MS + 1,
-                "quotaBelowTime": false,
-                "entryAlertSent": false
-            }]
-        });
-        assert!(validate_codex_usage_monitor_state(value).is_err());
     }
 }

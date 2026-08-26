@@ -1,8 +1,7 @@
 //! Runtime-neutral Gemini compatibility protocol.
 //!
-//! This module owns only routing and JSON adaptation. Network I/O, Cloudflare
-//! bindings, SSE decoding, and tokenization live behind transport/application
-//! boundaries so the protocol can be tested on the host target.
+//! This module owns routing and JSON adaptation. Network I/O, Cloudflare
+//! bindings, SSE decoding, and tokenization live in transport/application.
 
 mod error;
 mod models;

@@ -48,7 +48,7 @@ fn parse_object(encoded: &[u8], content_encoding: Option<&str>) -> AppResult<Jso
         Cow::Borrowed(encoded)
     };
 
-    // Match TextDecoder by replacing malformed UTF-8 before JSON validation.
+    // Malformed UTF-8 is replaced before JSON validation.
     let text = String::from_utf8_lossy(&decoded);
     match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(object)) => Ok(object),
@@ -59,13 +59,13 @@ fn parse_object(encoded: &[u8], content_encoding: Option<&str>) -> AppResult<Jso
 fn decode_zstd(encoded: &[u8]) -> Cow<'_, [u8]> {
     let mut decoder = match StreamingDecoder::new(encoded) {
         Ok(decoder) => decoder,
-        // Some clients transparently decompress while retaining this header.
+        // Clients can deliver decoded JSON while retaining this header.
         Err(_) => return Cow::Borrowed(encoded),
     };
 
     let mut decoded = Vec::with_capacity(encoded.len());
     if decoder.read_to_end(&mut decoded).is_err() {
-        // Match the retained-header fallback for malformed zstd streams.
+        // The raw bytes may still be valid JSON when the header was retained.
         return Cow::Borrowed(encoded);
     }
     Cow::Owned(decoded)
@@ -124,8 +124,8 @@ mod tests {
 
     #[test]
     fn accepts_transparently_decoded_bytes_with_a_retained_zstd_header() {
-        let parsed = parse_json_body(Some(br#"{"input":"hello"}"#), Some("zstd"))
-            .expect("raw JSON fallback");
+        let parsed =
+            parse_json_body(Some(br#"{"input":"hello"}"#), Some("zstd")).expect("valid JSON body");
         assert_eq!(parsed["input"], "hello");
     }
 

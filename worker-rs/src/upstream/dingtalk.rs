@@ -31,7 +31,7 @@ impl DingTalkResponse {
     }
 }
 
-pub fn dingtalk_notification_payload<'a>(_title: &str, body: &'a str) -> DingTalkPayload<'a> {
+pub fn dingtalk_notification_payload(body: &str) -> DingTalkPayload<'_> {
     DingTalkPayload {
         msgtype: "text",
         text: DingTalkText { content: body },
@@ -99,13 +99,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_body_only_notification_payload() {
+    fn builds_notification_payload() {
         assert_eq!(
-            serde_json::to_value(dingtalk_notification_payload(
-                "Codex 额度提醒",
-                "额度提醒正文",
-            ))
-            .unwrap(),
+            serde_json::to_value(dingtalk_notification_payload("额度提醒正文")).unwrap(),
             json!({
                 "msgtype": "text",
                 "text": { "content": "额度提醒正文" },

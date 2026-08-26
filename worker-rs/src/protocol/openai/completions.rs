@@ -167,10 +167,10 @@ impl CompletionSseDecoder {
                         return Err(codex_stream_failed());
                     };
                     if chunk.get("error").and_then(Value::as_object).is_some() {
-                        converted_frames.push(sse_data(&Value::Object(chunk))?);
+                        converted_frames.push(sse_data(&Value::Object(chunk)));
                     } else if let Some(converted) = completion_chunk(&chunk, &mut self.pending_echo)
                     {
-                        converted_frames.push(sse_data(&Value::Object(converted))?);
+                        converted_frames.push(sse_data(&Value::Object(converted)));
                     }
                 }
             }

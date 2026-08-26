@@ -1,7 +1,7 @@
 //! Rust/WebAssembly implementation of the codex-worker backend.
 //!
-//! Runtime-neutral protocol and application modules stay testable on the host;
-//! Cloudflare bindings are isolated behind the `wasm32` transport boundary.
+//! Protocol and application modules remain runtime-neutral; Cloudflare bindings
+//! live behind the `wasm32` transport boundary.
 
 pub mod application;
 pub mod auth;

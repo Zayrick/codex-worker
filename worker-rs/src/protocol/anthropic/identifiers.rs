@@ -147,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn call_id_hash_matches_the_typescript_algorithm() {
+    fn call_id_hash_is_stable() {
         let id = format!("toolu_{}", "x".repeat(90));
         let shortened = shorten_codex_call_id(&id);
         assert_eq!(shortened.len(), CODEX_IDENTIFIER_LIMIT);

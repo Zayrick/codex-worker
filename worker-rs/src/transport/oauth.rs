@@ -7,10 +7,7 @@ use worker::{
 };
 
 use crate::{
-    auth::{
-        OAuthClock, OAuthHttpClient, OAuthHttpFailure, OAuthHttpMethod, OAuthHttpRequest,
-        OAuthHttpResponse,
-    },
+    auth::{OAuthClock, OAuthHttpClient, OAuthHttpFailure, OAuthHttpRequest, OAuthHttpResponse},
     http::LimitedBodyCollector,
 };
 
@@ -33,9 +30,6 @@ impl OAuthHttpClient for CloudflareOAuthHttpClient {
         &self,
         request: OAuthHttpRequest,
     ) -> Result<OAuthHttpResponse, OAuthHttpFailure> {
-        let method = match request.method {
-            OAuthHttpMethod::Post => Method::Post,
-        };
         let headers = Headers::new();
         for (name, value) in &request.headers {
             headers
@@ -43,7 +37,7 @@ impl OAuthHttpClient for CloudflareOAuthHttpClient {
                 .map_err(|_| OAuthHttpFailure::Network)?;
         }
         let mut init = RequestInit::new();
-        init.with_method(method)
+        init.with_method(Method::Post)
             .with_headers(headers)
             .with_body(Some(request.body.into()));
         let outgoing =

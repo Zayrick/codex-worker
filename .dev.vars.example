@@ -1,5 +1,4 @@
-# Documents the secret bindings required by the Worker during local development.
-# Values are intentionally empty so the required names remain versioned without credentials.
+# Local secret bindings
 ADMIN_PATH=
 ADMIN_SECRET=
 AUTH_PROXY_HOST=

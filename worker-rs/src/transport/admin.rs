@@ -54,9 +54,7 @@ async fn dispatch(
             let admin_secret = WorkerConfig::admin_secret(env)?;
             let encryption_key = WorkerConfig::encryption_key(env)?;
             let bytes = read_limited_body(request, MAX_ADMIN_BODY_BYTES)
-                .await
-                .ok()
-                .flatten()
+                .await?
                 .unwrap_or_default();
             let secret = url::form_urlencoded::parse(&bytes)
                 .find(|(name, _)| name == "secret")
@@ -326,10 +324,8 @@ async fn admin_json(request: &mut Request) -> AppResult<JsonObject> {
     let Some(bytes) = bytes else {
         return Err(invalid_admin_json());
     };
-    serde_json::from_slice::<Value>(&bytes)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .ok_or_else(invalid_admin_json)
+    let value = serde_json::from_slice::<Value>(&bytes).map_err(|_| invalid_admin_json())?;
+    value.as_object().cloned().ok_or_else(invalid_admin_json)
 }
 
 fn require_same_origin(request: &Request, url: &url::Url) -> AppResult<()> {

@@ -43,10 +43,22 @@ pub(crate) fn validate_auth_proxy_account_with_id(
     id: String,
 ) -> AppResult<AuthProxyAccount> {
     let object = value.as_object().ok_or_else(invalid_auth_proxy_account)?;
-    let name = validate_auth_proxy_account_name(object.get("name").and_then(Value::as_str))?;
-    let account_id = object
-        .get("accountId")
-        .and_then(Value::as_str)
+    validate_auth_proxy_account_fields(
+        id,
+        object.get("name").and_then(Value::as_str),
+        object.get("accountId").and_then(Value::as_str),
+        object.get("enabled").and_then(Value::as_bool),
+    )
+}
+
+fn validate_auth_proxy_account_fields(
+    id: String,
+    name: Option<&str>,
+    account_id: Option<&str>,
+    enabled: Option<bool>,
+) -> AppResult<AuthProxyAccount> {
+    let name = validate_auth_proxy_account_name(name)?;
+    let account_id = account_id
         .map(str::trim)
         .filter(|value| {
             !value.is_empty()
@@ -54,10 +66,7 @@ pub(crate) fn validate_auth_proxy_account_with_id(
                 && value.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
         })
         .ok_or_else(invalid_auth_proxy_account)?;
-    let enabled = object
-        .get("enabled")
-        .and_then(Value::as_bool)
-        .ok_or_else(invalid_auth_proxy_account)?;
+    let enabled = enabled.ok_or_else(invalid_auth_proxy_account)?;
     Ok(AuthProxyAccount {
         id,
         name,
@@ -85,17 +94,9 @@ pub(crate) fn validate_stored_auth_proxy_accounts(
     values: impl IntoIterator<Item = AuthProxyAccount>,
     master_key: &str,
 ) -> AppResult<(Vec<AuthProxyAccount>, bool)> {
-    validate_auth_proxy_account_collection(values, master_key, invalid_stored_auth_proxy_accounts)
-}
-
-fn validate_auth_proxy_account_collection(
-    values: impl IntoIterator<Item = AuthProxyAccount>,
-    master_key: &str,
-    error: fn() -> ApiError,
-) -> AppResult<(Vec<AuthProxyAccount>, bool)> {
     let values: Vec<_> = values.into_iter().collect();
     if values.len() > MAX_AUTH_PROXY_ACCOUNTS {
-        return Err(error());
+        return Err(invalid_stored_auth_proxy_accounts());
     }
     let mut ids = HashSet::new();
     let mut names = HashSet::new();
@@ -109,18 +110,20 @@ fn validate_auth_proxy_account_collection(
         } else if valid_record_id(&value.id) {
             value.id.clone()
         } else {
-            return Err(error());
+            return Err(invalid_stored_auth_proxy_accounts());
         };
-        let normalized = validate_auth_proxy_account_with_id(
-            &serde_json::to_value(value).map_err(|_| error())?,
+        let normalized = validate_auth_proxy_account_fields(
             id,
+            Some(&value.name),
+            Some(&value.account_id),
+            Some(value.enabled),
         )
-        .map_err(|_| error())?;
+        .map_err(|_| invalid_stored_auth_proxy_accounts())?;
         if !ids.insert(normalized.id.clone())
             || !names.insert(normalized.name.clone())
             || !account_ids.insert(normalized.account_id.clone())
         {
-            return Err(error());
+            return Err(invalid_stored_auth_proxy_accounts());
         }
         validated.push(normalized);
     }

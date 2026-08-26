@@ -227,9 +227,8 @@ fn utf8_width(first: u8) -> Option<usize> {
     }
 }
 
-pub(crate) fn sse_data(value: &Value) -> AppResult<String> {
-    let encoded = serde_json::to_string(value).map_err(|_| codex_stream_failed())?;
-    Ok(format!("data: {encoded}\n\n"))
+pub(crate) fn sse_data(value: &Value) -> String {
+    format!("data: {value}\n\n")
 }
 
 #[cfg(test)]

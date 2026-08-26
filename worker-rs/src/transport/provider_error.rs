@@ -19,7 +19,7 @@ const GEMINI_MAX_UPSTREAM_ERROR_BYTES: usize = 1024 * 1024;
 
 /// Headers that are useful to clients and safe to copy onto a newly encoded
 /// JSON error. Entity, hop-by-hop, cookie, and arbitrary upstream headers are
-/// deliberately excluded.
+/// excluded.
 const FORWARDED_ERROR_HEADERS: &[&str] = &[
     "Retry-After",
     "Request-Id",
@@ -120,7 +120,7 @@ fn json_error_response<T: Serialize + ?Sized>(
 }
 
 /// Returns `None` for missing, oversized, or unreadable bodies. Callers use
-/// that single outcome to produce a provider-safe fallback message.
+/// that outcome to produce a provider-safe message.
 async fn read_bounded_body(upstream: &mut Response, max_bytes: usize) -> Option<Vec<u8>> {
     let declared_length = trimmed_header(upstream.headers(), "Content-Length");
     let raw_stream = match upstream.body() {

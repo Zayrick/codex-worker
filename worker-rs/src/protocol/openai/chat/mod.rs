@@ -11,9 +11,8 @@ use serde_json::Value;
 use crate::core::JsonObject;
 
 pub use presentation::{
-    ChatStreamPresenter, StreamPresentationState, chat_completion_from_events,
-    chat_completion_from_state, finish_reason, present_chat_action, stream_failure_frames,
-    usage_to_chat,
+    ChatStreamPresenter, StreamPresentationState, chat_completion_from_state, finish_reason,
+    present_chat_action, stream_failure_frames, usage_to_chat,
 };
 pub use request::chat_request_to_responses;
 pub use state::{

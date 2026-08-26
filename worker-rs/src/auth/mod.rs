@@ -24,8 +24,8 @@ pub use api_keys::{
 };
 pub use auth_proxy::{AuthProxyAccount, matching_auth_proxy_account};
 pub use credentials::{
-    CodexCredentials, OAuthRepository, OAuthStatus, StoredOAuthCredentials,
-    auth_proxy_credentials_or_primary, credentials_from_token_response, oauth_status,
+    OAuthRepository, OAuthStatus, StoredOAuthCredentials, auth_proxy_credentials_or_primary,
+    credentials_from_token_response, oauth_status,
 };
 pub use crypto::{constant_time_equal, open_json, seal_json, sha256};
 pub use device_flow::{
@@ -33,8 +33,8 @@ pub use device_flow::{
     DeviceAuthorizationService, DevicePollResult,
 };
 pub use oauth_ports::{
-    OAuthClock, OAuthCredentialsStore, OAuthHttpClient, OAuthHttpFailure, OAuthHttpMethod,
-    OAuthHttpRequest, OAuthHttpResponse,
+    OAuthClock, OAuthCredentialsStore, OAuthHttpClient, OAuthHttpFailure, OAuthHttpRequest,
+    OAuthHttpResponse,
 };
 pub use oauth_provider::{
     DEVICE_VERIFICATION_URL, MAX_OAUTH_RESPONSE_BYTES, OAuthProvider, PROVIDER_REQUEST_TIMEOUT_MS,

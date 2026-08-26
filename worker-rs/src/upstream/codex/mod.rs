@@ -2,7 +2,7 @@
 //!
 //! Transports own HTTP, body limits, cancellation, and WebSockets. This module
 //! accepts plain DTOs and returns normalized JSON, URLs, headers, and routing
-//! decisions that can be tested on a host target.
+//! decisions.
 
 mod headers;
 mod models;

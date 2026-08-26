@@ -26,7 +26,6 @@
 	--primary-border: #bfdbfe;
 	--success: #138a5b;
 	--success-soft: #e9f7f1;
-	--success-border: #c5eadb;
 	--warning: #bd6b13;
 	--warning-soft: #fff6e8;
 	--warning-border: #f2d9b8;
@@ -114,7 +113,6 @@ a {
 		--primary-border: #1e3a8a;
 		--success: #5fd1a0;
 		--success-soft: #17372b;
-		--success-border: #285c49;
 		--warning: #efad61;
 		--warning-soft: #3a2b19;
 		--warning-border: #654827;

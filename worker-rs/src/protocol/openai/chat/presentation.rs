@@ -59,21 +59,6 @@ impl ChatStreamPresenter {
     }
 }
 
-pub fn chat_completion_from_events(
-    events: &[JsonObject],
-    model: impl Into<String>,
-    created: Value,
-) -> AppResult<JsonObject> {
-    let mut state = create_chat_state(model, created);
-    for event in events {
-        reduce_codex_event(&mut state, event)?;
-        if state.terminal.is_some() {
-            break;
-        }
-    }
-    chat_completion_from_state(&state)
-}
-
 pub fn chat_completion_from_state(state: &ChatState) -> AppResult<JsonObject> {
     require_chat_terminal(state)?;
     require_chat_response_id(state)?;
@@ -220,7 +205,7 @@ pub fn present_chat_action(
                     state,
                     json_object(json!({"content":delta})),
                     Value::Null,
-                ))?);
+                )));
             }
         }
         ChatAction::ReasoningDelta(delta) => {
@@ -230,7 +215,7 @@ pub fn present_chat_action(
                     state,
                     json_object(json!({"reasoning_content":delta})),
                     Value::Null,
-                ))?);
+                )));
             }
         }
         ChatAction::ToolStarted {
@@ -238,7 +223,7 @@ pub fn present_chat_action(
             initial_arguments,
         } => {
             ensure_role_chunk(state, presentation, &mut frames)?;
-            frames.push(sse_data(&tool_start_chunk(state, tool, initial_arguments))?);
+            frames.push(sse_data(&tool_start_chunk(state, tool, initial_arguments)));
         }
         ChatAction::ToolArgumentsDelta { tool, delta } => {
             ensure_role_chunk(state, presentation, &mut frames)?;
@@ -252,7 +237,7 @@ pub fn present_chat_action(
                         }]
                     })),
                     Value::Null,
-                ))?);
+                )));
             }
         }
         ChatAction::ResponseCompleted => {
@@ -268,7 +253,7 @@ pub fn present_chat_action(
                     )
                     .into(),
                 ),
-            ))?);
+            )));
             if include_usage {
                 frames.push(sse_data(&json!({
                     "id":state.id,
@@ -277,7 +262,7 @@ pub fn present_chat_action(
                     "model":state.model,
                     "choices":[],
                     "usage":usage_to_chat(state.usage.as_ref())
-                }))?);
+                })));
             }
             frames.push(SSE_DONE.to_owned());
             presentation.finished = true;
@@ -286,11 +271,11 @@ pub fn present_chat_action(
     Ok(frames)
 }
 
-pub fn stream_failure_frames() -> AppResult<Vec<String>> {
-    Ok(vec![
-        sse_data(&codex_stream_failed().openai_payload())?,
+pub fn stream_failure_frames() -> Vec<String> {
+    vec![
+        sse_data(&codex_stream_failed().openai_payload()),
         SSE_DONE.to_owned(),
-    ])
+    ]
 }
 
 fn ensure_role_chunk(
@@ -306,7 +291,7 @@ fn ensure_role_chunk(
         state,
         json_object(json!({"role":"assistant","content":""})),
         Value::Null,
-    ))?);
+    )));
     presentation.role_sent = true;
     Ok(())
 }
@@ -387,11 +372,21 @@ mod tests {
         ]
     }
 
+    fn completion_from_events(events: &[JsonObject]) -> AppResult<JsonObject> {
+        let mut state = create_chat_state("requested-model", json!(0));
+        for event in events {
+            reduce_codex_event(&mut state, event)?;
+            if state.terminal.is_some() {
+                break;
+            }
+        }
+        chat_completion_from_state(&state)
+    }
+
     #[test]
     fn presents_terminal_only_json_and_sse() {
         let events = terminal_events("response.completed", None);
-        let completion =
-            chat_completion_from_events(&events, "requested-model", json!(0)).expect("completion");
+        let completion = completion_from_events(&events).expect("completion");
         assert_eq!(completion["id"], "chatcmpl-terminal");
         assert_eq!(
             completion["choices"][0]["message"]["content"],
@@ -427,8 +422,8 @@ mod tests {
             {
                 output.insert("output".into(), Value::Array(Vec::new()));
             }
-            let completion = chat_completion_from_events(&events, "model", json!(0))
-                .expect("incomplete is a valid terminal");
+            let completion =
+                completion_from_events(&events).expect("incomplete is a valid terminal");
             assert_eq!(completion["choices"][0]["finish_reason"], expected);
         }
 
@@ -436,8 +431,7 @@ mod tests {
             "type":"response.created",
             "response":{"id":"resp_truncated"}
         }))];
-        let error = chat_completion_from_events(&truncated, "model", json!(0))
-            .expect_err("truncated stream");
+        let error = completion_from_events(&truncated).expect_err("truncated stream");
         assert_eq!(error.code.as_deref(), Some("incomplete_codex_stream"));
     }
 }

@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use crate::core::JsonObject;
 
 use super::request_policy::{
-    BodyEditor, http_response_create_egress_policy, websocket_response_create_egress_policy,
+    BodyEditor, apply_http_response_create_egress_policy_to,
+    apply_websocket_response_create_egress_policy_to,
 };
 
 #[must_use]
@@ -22,7 +23,7 @@ pub fn adapt_responses_create_body<'a>(body: &'a JsonObject) -> Cow<'a, JsonObje
     let mut editor = BodyEditor::new(body);
     normalize_string_response_input(&mut editor);
     rewrite_system_message_roles(&mut editor);
-    http_response_create_egress_policy().apply_to(&mut editor);
+    apply_http_response_create_egress_policy_to(&mut editor);
     editor.finish()
 }
 
@@ -30,7 +31,7 @@ fn adapt_responses_websocket_create_body<'a>(body: &'a JsonObject) -> Cow<'a, Js
     let mut editor = BodyEditor::new(body);
     normalize_string_response_input(&mut editor);
     rewrite_system_message_roles(&mut editor);
-    websocket_response_create_egress_policy().apply_to(&mut editor);
+    apply_websocket_response_create_egress_policy_to(&mut editor);
     editor.finish()
 }
 
@@ -43,7 +44,7 @@ pub fn adapt_compact_body<'a>(body: &'a JsonObject) -> Cow<'a, JsonObject> {
 
 /// Returns the original wire message for malformed, unknown, or unchanged WS
 /// frames. JSON serialization is attempted only after a supported policy changed
-/// the body, matching the TypeScript behavior.
+/// the body.
 #[must_use]
 pub fn adapt_responses_websocket_message(message: &str) -> String {
     let Ok(Value::Object(body)) = serde_json::from_str::<Value>(message) else {
@@ -57,10 +58,10 @@ pub fn adapt_responses_websocket_message(message: &str) -> String {
         "response.append" => adapt_compact_body(&body),
         _ => return message.to_owned(),
     };
-    if matches!(adapted, Cow::Borrowed(_)) {
-        return message.to_owned();
+    match adapted {
+        Cow::Borrowed(_) => message.to_owned(),
+        Cow::Owned(body) => Value::Object(body).to_string(),
     }
-    serde_json::to_string(adapted.as_ref()).unwrap_or_else(|_| message.to_owned())
 }
 
 fn normalize_string_response_input(editor: &mut BodyEditor<'_>) {

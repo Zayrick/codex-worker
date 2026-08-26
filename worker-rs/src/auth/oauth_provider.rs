@@ -6,8 +6,7 @@ use url::form_urlencoded;
 use crate::core::{ApiError, AppResult};
 
 use super::oauth_ports::{
-    OAuthClock, OAuthHttpClient, OAuthHttpFailure, OAuthHttpMethod, OAuthHttpRequest,
-    OAuthHttpResponse,
+    OAuthClock, OAuthHttpClient, OAuthHttpFailure, OAuthHttpRequest, OAuthHttpResponse,
 };
 
 const CODEX_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -98,21 +97,22 @@ impl<'a> OAuthProvider<'a> {
     }
 
     pub async fn refresh_provider_token(&self, refresh_token: &str) -> AppResult<Value> {
-        for attempt in 0..MAX_REFRESH_ATTEMPTS {
+        let mut attempt = 1;
+        loop {
             match self.exchange_refresh_token(refresh_token).await {
                 Ok(payload) => return Ok(payload),
                 Err(RefreshExchangeError::Api(error)) => return Err(error),
                 Err(RefreshExchangeError::Provider(status))
-                    if retryable_provider_failure(status) && attempt + 1 < MAX_REFRESH_ATTEMPTS =>
+                    if retryable_provider_failure(status) && attempt < MAX_REFRESH_ATTEMPTS =>
                 {
-                    self.clock.sleep_ms((attempt as u64 + 1) * 1_000).await;
+                    self.clock.sleep_ms(attempt as u64 * 1_000).await;
+                    attempt += 1;
                 }
                 Err(RefreshExchangeError::Provider(status)) => {
                     return Err(provider_api_error(status));
                 }
             }
         }
-        Err(provider_api_error(None))
     }
 
     async fn exchange_authorization_code(
@@ -194,7 +194,6 @@ fn form_request(url: &str, values: &[(&str, &str)]) -> OAuthHttpRequest {
 
 fn request(url: &str, content_type: &str, body: String) -> OAuthHttpRequest {
     OAuthHttpRequest {
-        method: OAuthHttpMethod::Post,
         url: url.to_owned(),
         headers: vec![
             ("Accept".into(), "application/json".into()),
@@ -214,9 +213,6 @@ fn require_provider_json(response: OAuthHttpResponse) -> AppResult<Value> {
 }
 
 fn provider_json(body: &[u8]) -> AppResult<Value> {
-    if body.is_empty() || body.len() > MAX_OAUTH_RESPONSE_BYTES {
-        return Err(invalid_provider_response());
-    }
     serde_json::from_slice(body).map_err(|_| invalid_provider_response())
 }
 

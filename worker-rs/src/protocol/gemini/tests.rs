@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
-use crate::core::{AppResult, JsonObject};
+use crate::core::JsonObject;
 
 use super::*;
 
@@ -53,7 +53,7 @@ fn path_matcher_decodes_models_and_rejects_unsupported_shapes() {
 }
 
 #[test]
-fn request_adaptation_matches_the_typescript_contract() {
+fn request_adaptation_maps_gemini_fields() {
     let long_name = format!("mcp__weather__{}", "lookup".repeat(12));
     let signature = format!("gAAAA{}", "G".repeat(120));
     let request = json!({
@@ -141,13 +141,13 @@ fn request_adaptation_matches_the_typescript_contract() {
 struct LengthCounter;
 
 impl TokenCounter for LengthCounter {
-    fn count_tokens(&self, request: &JsonObject) -> AppResult<u64> {
-        Ok(request["input"].as_array().map_or(0, |input| input.len()) as u64 + 2)
+    fn count_tokens(&self, request: &JsonObject) -> u64 {
+        request["input"].as_array().map_or(0, |input| input.len()) as u64 + 2
     }
 }
 
 #[test]
-fn count_request_supports_nested_body_through_an_abstract_port() {
+fn count_request_supports_nested_body() {
     let input = json!({
         "generateContentRequest": {
             "contents": [{ "role": "user", "parts": [{ "text": "Count this." }] }]

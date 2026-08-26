@@ -461,12 +461,7 @@ fn sse_headers(source: &Headers) -> worker::Result<Headers> {
 }
 
 fn openai_failure_frames() -> Vec<String> {
-    openai::chat::stream_failure_frames().unwrap_or_else(|_| {
-        vec![
-            "data: {\"error\":{\"message\":\"The Codex response stream failed.\",\"type\":\"upstream_error\",\"code\":\"codex_stream_failed\"}}\n\n".into(),
-            openai::sse::SSE_DONE.into(),
-        ]
-    })
+    openai::chat::stream_failure_frames()
 }
 
 fn completion_failure_frames(
@@ -483,7 +478,7 @@ fn completion_failure_frames(
 }
 
 fn render_anthropic(event: &anthropic::AnthropicSseEvent) -> String {
-    let data = serde_json::to_string(&event.data).unwrap_or_else(|_| "{}".into());
+    let data = serde_json::to_string(&event.data).expect("JSON objects are serializable");
     format!("event: {}\ndata: {data}\n\n", event.event)
 }
 

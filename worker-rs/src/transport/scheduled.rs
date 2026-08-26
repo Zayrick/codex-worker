@@ -98,7 +98,7 @@ async fn monitor_usage(
             let webhook = WorkerConfig::dingtalk_webhook_url(env)?;
             let secret = WorkerConfig::dingtalk_secret(env)?;
             DingTalkClient::new(webhook, secret)
-                .send(&notification, now_ms)
+                .send(&notification.body, now_ms)
                 .await
         };
         let (bark_delivery, dingtalk_delivery) = futures_util::join!(bark, dingtalk);

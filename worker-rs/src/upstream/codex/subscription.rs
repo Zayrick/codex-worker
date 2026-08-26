@@ -4,7 +4,7 @@ use base64::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::core::{ApiError, AppResult, JsonObject, record_field};
 
@@ -98,10 +98,7 @@ pub struct CodexSubscriptionInfo {
     pub fetched_at: f64,
 }
 
-/// Extracts display-only subscription metadata from an ID token.
-///
-/// Signature and credential validity are deliberately not checked here; that
-/// belongs to the authentication boundary before this parser is called.
+/// Extracts display metadata from an ID token accepted by the authentication boundary.
 pub fn codex_subscription_metadata(id_token: Option<&str>) -> CodexSubscriptionMetadata {
     let claims = id_token.and_then(decode_jwt);
     let auth = record_field(claims.as_ref(), "https://api.openai.com/auth").or(claims.as_ref());
@@ -351,91 +348,9 @@ fn date_value_to_ms(value: Option<&Value>) -> Option<f64> {
 }
 
 fn parse_rfc3339_ms(value: &str) -> Option<f64> {
-    let (date, time_and_zone) = if let Some(parts) = value.split_once('T') {
-        parts
-    } else if let Some(parts) = value.split_once('t') {
-        parts
-    } else if let Some(parts) = value.split_once(' ') {
-        parts
-    } else {
-        return parse_date(value).map(|date| {
-            PrimitiveDateTime::new(date, Time::MIDNIGHT)
-                .assume_utc()
-                .unix_timestamp_nanos() as f64
-                / 1_000_000.0
-        });
-    };
-    let date = parse_date(date)?;
-    let (time, offset) = parse_time_and_offset(time_and_zone)?;
-    let milliseconds = (PrimitiveDateTime::new(date, time)
-        .assume_offset(offset)
-        .unix_timestamp_nanos() as f64
-        / 1_000_000.0)
-        .trunc();
+    let timestamp = OffsetDateTime::parse(value, &Rfc3339).ok()?;
+    let milliseconds = (timestamp.unix_timestamp_nanos() as f64 / 1_000_000.0).trunc();
     (milliseconds.abs() <= MAX_JAVASCRIPT_DATE_MS).then_some(milliseconds)
-}
-
-fn parse_date(value: &str) -> Option<Date> {
-    let mut parts = value.split('-');
-    let year = parts.next()?.parse::<i32>().ok()?;
-    let month = Month::try_from(parts.next()?.parse::<u8>().ok()?).ok()?;
-    let day = parts.next()?.parse::<u8>().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    Date::from_calendar_date(year, month, day).ok()
-}
-
-fn parse_time_and_offset(value: &str) -> Option<(Time, UtcOffset)> {
-    let (time, offset) = if let Some(time) = value.strip_suffix(['Z', 'z']) {
-        (time, UtcOffset::UTC)
-    } else if let Some(index) = value
-        .char_indices()
-        .skip(1)
-        .find_map(|(index, character)| matches!(character, '+' | '-').then_some(index))
-    {
-        let (time, raw_offset) = value.split_at(index);
-        let sign = if raw_offset.starts_with('-') { -1 } else { 1 };
-        let mut parts = raw_offset[1..].split(':');
-        let hours = parts.next()?.parse::<i8>().ok()?;
-        let minutes = parts.next()?.parse::<i8>().ok()?;
-        if parts.next().is_some() {
-            return None;
-        }
-        (
-            time,
-            UtcOffset::from_hms(sign * hours, sign * minutes, 0).ok()?,
-        )
-    } else {
-        (value, UtcOffset::UTC)
-    };
-    let (clock, fraction) = time
-        .split_once('.')
-        .map_or((time, None), |(clock, fraction)| (clock, Some(fraction)));
-    let mut parts = clock.split(':');
-    let hour = parts.next()?.parse::<u8>().ok()?;
-    let minute = parts.next()?.parse::<u8>().ok()?;
-    let second = parts.next()?.parse::<u8>().ok()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    let nanos = match fraction {
-        Some(fraction) => parse_fraction_nanos(fraction)?,
-        None => 0,
-    };
-    Some((
-        Time::from_hms_nano(hour, minute, second, nanos).ok()?,
-        offset,
-    ))
-}
-
-fn parse_fraction_nanos(value: &str) -> Option<u32> {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    let digits = &value[..value.len().min(9)];
-    let parsed = digits.parse::<u32>().ok()?;
-    Some(parsed * 10_u32.pow((9 - digits.len()) as u32))
 }
 
 fn normalize_plan_type(value: Option<&Value>) -> Option<String> {

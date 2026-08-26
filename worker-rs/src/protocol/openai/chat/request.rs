@@ -545,7 +545,7 @@ fn adapt_tool_output(value: Option<&Value>) -> Value {
     if let Some(parts) = value.as_array() {
         return Value::Array(parts.iter().map(adapt_tool_output_part).collect());
     }
-    Value::String(serde_json::to_string(value).unwrap_or_default())
+    Value::String(value.to_string())
 }
 
 fn adapt_tool_output_part(value: &Value) -> Value {
@@ -555,7 +555,7 @@ fn adapt_tool_output_part(value: &Value) -> Value {
     let Some(part) = value.as_object() else {
         return json!({
             "type":"input_text",
-            "text":if value.is_null() { String::new() } else { serde_json::to_string(value).unwrap_or_default() }
+            "text":if value.is_null() { String::new() } else { value.to_string() }
         });
     };
     let kind = part.get("type").and_then(Value::as_str);
@@ -579,7 +579,7 @@ fn adapt_tool_output_part(value: &Value) -> Value {
     }
     json!({
         "type":"input_text",
-        "text":serde_json::to_string(value).unwrap_or_default()
+        "text":value.to_string()
     })
 }
 

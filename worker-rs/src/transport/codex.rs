@@ -67,11 +67,7 @@ pub struct CodexUsageDocument {
     pub metadata: CodexSubscriptionMetadata,
 }
 
-/// Factory-owned Codex relay client.
-///
-/// Keeping OAuth access behind the repository means transports never know the
-/// encrypted persistence format, while relay policies remain independently
-/// replaceable and host-testable.
+/// Codex relay client backed by the encrypted OAuth repository.
 pub struct CodexClient<'repository, 'store> {
     oauth: &'repository OAuthRepository<'store>,
     relay_origin: String,
@@ -207,11 +203,10 @@ impl<'repository, 'store> CodexClient<'repository, 'store> {
     }
 
     async fn credentials(&self) -> AppResult<CodexCredentials> {
-        let now_ms = current_time_ms();
-        let credentials = self.oauth.codex_credentials(now_ms).await?;
+        let stored = self.oauth.require_valid(current_time_ms()).await?;
         Ok(CodexCredentials {
-            token: credentials.token,
-            account_id: credentials.account_id,
+            token: stored.access_token,
+            account_id: stored.account_id,
         })
     }
 
