@@ -15,7 +15,7 @@ OpenAI、Anthropic 和 Gemini 风格的接口。
 - 公开协议 API 与透明转发共用同一 Worker Host；`/backend-api/*` 按 `account_id` 选择独立代理 OAuth、主 OAuth 回退或原认证透传，其他未注册路径保持原始凭据；
 - 仅公开用量页和隐藏管理页返回 HTML；其他声明为 HTML 或 XHTML 的响应保留状态与无关 header，但清空正文；
 - 使用 Workers KV 保存 OAuth 凭据、API Key 与 Codex 用量快照，并以 AES-256-GCM 加密；
-- 每 5 分钟采集 Codex 用量、分别刷新即将过期的主账户与代理账户 OAuth 凭据，并通过 Bark 与钉钉机器人提醒消耗进度变化和额度重置；
+- 每 5 分钟采集 Codex 用量、查询公开的 reset watch、分别刷新即将过期的主账户与代理账户 OAuth 凭据，并通过 Bark 与钉钉机器人提醒消耗进度变化、额度重置和近期 reset 预测；
 - 在公开的 `/status/usage` 页面展示 KV 用量快照；时间轴从最早的当前配额周期开始，按各窗口周期向未来一周推算；
 - 将 React 管理端与 Rust/Wasm Worker 构建为同一个 Cloudflare 部署单元。
 
@@ -29,6 +29,7 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
                                           │          ├─→ Static Assets
                                           │          ├─→ auth.openai.com
                                           │          ├─→ api.openai.com
+                                          │          ├─→ codex-resets.com public API
                                           │          ├─→ Bark HTTPS endpoint
                                           │          ├─→ DingTalk robot webhook
                                           │          └─→ trusted HTTPS relay ─→ chatgpt.com
@@ -41,12 +42,13 @@ Browser ── hidden admin path ── React UI ─┼─→ Cloudflare Worker 
 [安全模型](docs/security.md)。
 
 `BARK_PUSH_URL` 是 Bark App 提供的 HTTPS 设备端点，例如
-`https://api.day.app/<device-key>`。Worker 只向该端点发送额度窗口名称、剩余额度百分比、剩余时间百分比和额度状态，
-不会发送 OAuth、API Key、账户标识或模型请求内容。
+`https://api.day.app/<device-key>`。Worker 向该端点发送额度窗口告警，或公开 reset watch 的概率、
+东八区预测时间、来源文本和来源链接；不会发送 OAuth、API Key、账户标识或模型请求内容。
 
 `DINGTALK_WEBHOOK_URL` 和 `DINGTALK_SECRET` 分别是钉钉自定义机器人的完整 Webhook 地址与
 安全设置中的加签密钥。Worker 按钉钉协议为每次请求生成时间戳和 HMAC-SHA256 签名，并发送与
-Bark 相同范围的用量提醒内容。
+Bark 相同范围的提醒内容。reset watch 使用 Markdown，标题加粗，来源文本链接到 API 返回的
+`source.url`。
 
 ## 环境要求
 

@@ -15,15 +15,22 @@ pub struct BarkPushPayload<'a> {
     group: &'static str,
     level: &'static str,
     icon: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<&'a str>,
 }
 
-pub fn bark_push_payload<'a>(title: &'a str, body: &'a str) -> BarkPushPayload<'a> {
+pub fn bark_push_payload<'a>(
+    title: &'a str,
+    body: &'a str,
+    url: Option<&'a str>,
+) -> BarkPushPayload<'a> {
     BarkPushPayload {
         title,
         body,
         group: BARK_PUSH_GROUP,
         level: BARK_PUSH_LEVEL,
         icon: BARK_PUSH_ICON,
+        url,
     }
 }
 
@@ -66,7 +73,8 @@ mod tests {
     #[test]
     fn builds_codex_usage_push_presentation() {
         let payload =
-            serde_json::to_value(bark_push_payload("Codex 用量提醒", "额度提醒正文")).unwrap();
+            serde_json::to_value(bark_push_payload("Codex 用量提醒", "额度提醒正文", None))
+                .unwrap();
         assert_eq!(
             payload,
             json!({
@@ -77,6 +85,17 @@ mod tests {
                 "icon": "https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-avatar/avatars/codex.webp",
             })
         );
+    }
+
+    #[test]
+    fn includes_a_click_url_when_present() {
+        let payload = serde_json::to_value(bark_push_payload(
+            "Codex reset",
+            "forecast",
+            Some("https://x.com/source"),
+        ))
+        .unwrap();
+        assert_eq!(payload["url"], "https://x.com/source");
     }
 
     #[test]

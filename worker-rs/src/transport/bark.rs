@@ -4,7 +4,7 @@ use worker::{
 };
 
 use crate::{
-    application::UsageNotification,
+    application::PushNotification,
     core::AppResult,
     upstream::bark::{
         BARK_PUSH_REQUEST_TIMEOUT_MS, bark_push_payload, bark_push_unavailable, parse_bark_push_url,
@@ -24,12 +24,16 @@ impl BarkClient {
         })
     }
 
-    pub async fn send(&self, notification: &UsageNotification) -> AppResult<()> {
+    pub async fn send(&self, notification: &PushNotification) -> AppResult<()> {
         let headers = Headers::new();
         headers
             .set("content-type", "application/json; charset=utf-8")
             .map_err(|_| bark_push_unavailable())?;
-        let payload = bark_push_payload(&notification.title, &notification.body);
+        let payload = bark_push_payload(
+            &notification.title,
+            &notification.body,
+            notification.url.as_deref(),
+        );
         let body = serde_json::to_string(&payload).map_err(|_| bark_push_unavailable())?;
         let mut init = RequestInit::new();
         init.with_method(Method::Post)

@@ -2,12 +2,13 @@
 
 ## 1. 安全边界
 
-Codex Worker 涉及四类主体：
+Codex Worker 涉及五类主体：
 
 1. 下游 API 客户端；
 2. 同源管理浏览器；
 3. Cloudflare Worker、Static Assets 与 KV；
-4. OpenAI 端点和部署者提供的 ChatGPT relay。
+4. OpenAI 端点和部署者提供的 ChatGPT relay；
+5. 公开的 Codex Resets API、Bark 服务与钉钉机器人。
 
 Worker 负责下游鉴权、凭据加密、路由隔离和 header 过滤。Cloudflare 账户、GitHub 部署凭据、
 relay 主机及 OpenAI 账户的安全由部署者负责。
@@ -21,9 +22,9 @@ relay 主机及 OpenAI 账户的安全由部署者负责。
 | --- | --- | --- |
 | `ADMIN_PATH` | 隐藏管理入口，降低无目标扫描 | 旧管理 URL 失效 |
 | `ADMIN_SECRET` | 验证管理登录，并参与会话绑定 | 所有现有管理会话失效 |
-| `BARK_PUSH_URL` | 指定包含设备 key 的 Bark HTTPS 推送端点 | 后续用量提醒切换到新设备或服务 |
+| `BARK_PUSH_URL` | 指定包含设备 key 的 Bark HTTPS 推送端点 | 后续提醒切换到新设备或服务 |
 | `DINGTALK_SECRET` | 为钉钉机器人请求生成 HMAC-SHA256 签名 | 旧密钥生成的后续请求不再通过验证 |
-| `DINGTALK_WEBHOOK_URL` | 指定包含 access token 的钉钉机器人 HTTPS Webhook | 后续用量提醒切换到新机器人 |
+| `DINGTALK_WEBHOOK_URL` | 指定包含 access token 的钉钉机器人 HTTPS Webhook | 后续提醒切换到新机器人 |
 | `CHATGPT_RELAY_URL` | 指定受信任上游 relay | 后续流量切换到新信任主体 |
 | `DATA_ENCRYPTION_KEY` | 加密持久化凭据、用量、设备 state 与管理会话 | 现有加密数据和会话无法读取 |
 
@@ -118,13 +119,19 @@ no-store`。重定向使用手动模式，避免 OAuth 自动重放到未知 ori
 OAuth 设备授权与刷新直连 `auth.openai.com`；Realtime sideband 直连 `api.openai.com`；
 ChatGPT Codex 与订阅用量请求发送到配置的 relay。relay origin 必须通过 HTTPS 精确匹配校验。
 
-Bark 推送只包含额度窗口名称、额度剩余百分比、剩余时间百分比以及消耗进度或额度重置状态，不包含
-OAuth、账户 ID、邮箱、API Key 或模型请求内容。`BARK_PUSH_URL` 必须是无 userinfo、query、
-fragment 和尾部斜杠的精确 HTTPS 端点；Worker 对 Bark 响应使用手动重定向策略，避免把设备
-key 重放到其他 origin。使用公共 Bark 服务时，部署者必须接受该服务能够看到上述用量元数据；
-否则应使用受信任的自托管 Bark 服务。
+Worker 每 5 分钟向 `https://codex-resets.com/api/v1/status` 发起无需鉴权的只读请求，不携带
+OAuth、Cookie、API Key、账户信息或其他业务正文。API 返回的预测时间、概率、公开文本和来源
+链接会发送到 Bark 与钉钉。
 
-钉钉推送使用相同范围的用量元数据，不包含 OAuth、账户 ID、邮箱、API Key 或模型请求内容。
+Bark 推送包含额度窗口名称、额度百分比与状态，或公开 reset watch 的概率、东八区预测时间、
+来源文本和来源链接，不包含 OAuth、账户 ID、邮箱、API Key 或模型请求内容。
+`BARK_PUSH_URL` 必须是无 userinfo、query、fragment 和尾部斜杠的精确 HTTPS 端点；Worker 对
+Bark 响应使用手动重定向策略，避免把设备 key 重放到其他 origin。使用公共 Bark 服务时，
+部署者必须接受该服务能够看到上述用量元数据与公开 reset watch 内容；否则应使用受信任的
+自托管 Bark 服务。
+
+钉钉推送使用相同范围的用量元数据与公开 reset watch 内容，不包含 OAuth、账户 ID、邮箱、
+API Key 或模型请求内容。reset watch 的 API 文本作为 Markdown 链接显示。
 `DINGTALK_WEBHOOK_URL` 仅接受钉钉官方 `oapi.dingtalk.com` 的精确 HTTPS 机器人发送路径和唯一的
 `access_token` 参数；Worker 使用 `DINGTALK_SECRET` 与当前毫秒时间戳生成 HMAC-SHA256 签名，
 将签名和时间戳追加到请求 URL，并使用手动重定向策略。钉钉响应以 64 KiB 为上限读取，只有

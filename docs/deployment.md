@@ -33,7 +33,7 @@ pnpm install --frozen-lockfile
 | Static Assets binding | `ASSETS` | React 管理端资源 |
 | KV binding | `AUTH_KV` | 加密的主/代理 OAuth、API Key、Backend API 代理设置与 Codex 用量状态 |
 | Variable | `CORS_ORIGIN=*` | 公开 API 的单一 CORS origin |
-| Cron Trigger | `*/5 * * * *` | 每 5 分钟采集用量、执行 Bark 与钉钉告警并检查主账户与代理账户 OAuth 刷新 |
+| Cron Trigger | `*/5 * * * *` | 每 5 分钟查询 reset watch、采集用量、执行 Bark 与钉钉告警并检查主账户与代理账户 OAuth 刷新 |
 | Observability | enabled | 结构化 Worker 日志与 source map |
 
 `AUTH_KV` 未声明 namespace ID，因此 Wrangler 当前会使用
@@ -50,7 +50,7 @@ namespace 中的数据由当前 `DATA_ENCRYPTION_KEY` 加密。
 | --- | --- | --- |
 | `ADMIN_PATH` | 1–128 个 ASCII 字母、数字、`_` 或 `-` | 构成隐藏管理路径 |
 | `ADMIN_SECRET` | 独立生成的高强度随机值 | 验证管理登录并绑定会话 |
-| `BARK_PUSH_URL` | `https://<host>/<device-key>` | 接收 Codex 消耗进度变化和额度重置提醒 |
+| `BARK_PUSH_URL` | `https://<host>/<device-key>` | 接收 Codex 用量和近期 reset watch 提醒 |
 | `DINGTALK_SECRET` | `SEC...` | 钉钉自定义机器人安全设置中的加签密钥 |
 | `DINGTALK_WEBHOOK_URL` | `https://oapi.dingtalk.com/robot/send?access_token=...` | 钉钉自定义机器人的完整 Webhook 地址 |
 | `CHATGPT_RELAY_URL` | 精确 HTTPS origin | ChatGPT Codex 与用量请求的 relay |
@@ -245,7 +245,7 @@ curl -i https://worker.example.com/v1/models \
 - 管理页只在配置的精确路径可访问；
 - 管理登录、订阅读取和 API Key 编辑正常；
 - relay 支持 SSE 与 WebSocket，而非只支持普通 JSON；
-- 下一次定时任务写入 `CODEX_USAGE`，满足条件时 Bark 与钉钉群能收到提醒；
+- 下一次定时任务写入 `CODEX_USAGE`，用量或最近 5 分钟出现 reset watch 时 Bark 与钉钉群能收到对应提醒；
 - Worker 日志不包含 token、API Key、Bark 设备 URL、钉钉 Webhook 或加签密钥、管理密钥或请求正文。
 
 ## 10. Secret 与数据变更
@@ -271,8 +271,8 @@ curl -i https://worker.example.com/v1/models \
 | `/healthz` 返回 `404` | 检查 OAuth 是否存在、可解密且未过期 |
 | API 返回空 `404` | 检查路径、方法、API Key 状态、KV binding 和加密密钥 |
 | 上游接口返回错误 | 检查 relay origin、relay 日志策略、OAuth 状态和账户能力 |
-| 没有收到 Bark 提醒 | 检查 `BARK_PUSH_URL`、Cron 日志和当前额度是否满足告警条件 |
-| 没有收到钉钉提醒 | 检查 Webhook、加签密钥、机器人安全设置、Cron 日志和当前额度是否满足告警条件 |
+| 没有收到 Bark 提醒 | 检查 `BARK_PUSH_URL`、Cron 日志和当前提醒条件 |
+| 没有收到钉钉提醒 | 检查 Webhook、加签密钥、机器人安全设置、Cron 日志和当前提醒条件 |
 | API Key 变更未立即生效 | 考虑 Workers KV 的跨区域最终一致性 |
 | 部署使用旧产物 | 重新执行 `pnpm build`，再从仓库根目录运行 Wrangler |
 
@@ -283,5 +283,7 @@ curl -i https://worker.example.com/v1/models \
 - [Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
 - [Cron Triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
 - [Workers KV](https://developers.cloudflare.com/kv/)
+- [Codex Resets API](https://codex-resets.com/api/docs)
 - [Bark push API](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md)
+- [钉钉机器人 Markdown 消息](https://open.dingtalk.com/document/robots/internal-chatbot-enables-group-chat-to-send-markdown-messages)
 - [钉钉自定义机器人安全设置](https://open.dingtalk.com/document/robots/customize-robot-security-settings)

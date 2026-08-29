@@ -16,6 +16,18 @@ pub struct DingTalkPayload<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct DingTalkMarkdownPayload<'a> {
+    msgtype: &'static str,
+    markdown: DingTalkMarkdown<'a>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct DingTalkMarkdown<'a> {
+    title: &'a str,
+    text: String,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
 struct DingTalkText<'a> {
     content: &'a str,
 }
@@ -35,6 +47,20 @@ pub fn dingtalk_notification_payload(body: &str) -> DingTalkPayload<'_> {
     DingTalkPayload {
         msgtype: "text",
         text: DingTalkText { content: body },
+    }
+}
+
+pub fn dingtalk_markdown_notification_payload<'a>(
+    title: &'a str,
+    body: &str,
+    url: &str,
+) -> DingTalkMarkdownPayload<'a> {
+    DingTalkMarkdownPayload {
+        msgtype: "markdown",
+        markdown: DingTalkMarkdown {
+            title,
+            text: format!("**{title}**\n\n[{body}]({url})"),
+        },
     }
 }
 
@@ -105,6 +131,25 @@ mod tests {
             json!({
                 "msgtype": "text",
                 "text": { "content": "额度提醒正文" },
+            })
+        );
+    }
+
+    #[test]
+    fn builds_a_bold_markdown_notification_with_linked_text() {
+        assert_eq!(
+            serde_json::to_value(dingtalk_markdown_notification_payload(
+                "Codex将有70%可能性将在08月30日 15:00重置",
+                "第一行\n\n第二行",
+                "https://x.com/source",
+            ))
+            .unwrap(),
+            json!({
+                "msgtype": "markdown",
+                "markdown": {
+                    "title": "Codex将有70%可能性将在08月30日 15:00重置",
+                    "text": "**Codex将有70%可能性将在08月30日 15:00重置**\n\n[第一行\n\n第二行](https://x.com/source)",
+                },
             })
         );
     }

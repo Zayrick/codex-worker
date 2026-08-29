@@ -16,6 +16,7 @@ Codex Worker 将多种客户端协议收敛到 ChatGPT Codex 上游，同时保�
                          ┌──────────────────────────────┐
 API clients ────────────→│                              │
                          │ Cloudflare Worker            │──→ trusted relay ─→ chatgpt.com
+                         │                              │──→ codex-resets.com public API
                          │                              │──→ Bark HTTPS endpoint
                          │                              │──→ DingTalk robot webhook
 Admin browser ──────────→│ Rust/Wasm backend            │──→ auth.openai.com
@@ -36,8 +37,9 @@ Admin browser ──────────→│ Rust/Wasm backend            
 | Static Assets | 保存 Vite 构建的 Web 资源；HTML 由精确匹配的隐藏管理路径或公开用量状态路径读取 |
 | ChatGPT relay | 代表 Worker 访问 `chatgpt.com` 的 Codex 与用量路径 |
 | OpenAI 直连端点 | 承载 OAuth 设备流、token 刷新和 Realtime sideband |
-| Bark endpoint | 接收消耗进度变化和额度重置提醒 |
-| DingTalk robot webhook | 接收带时间戳与 HMAC-SHA256 加签的消耗进度变化和额度重置提醒 |
+| Codex Resets API | 提供无需鉴权的公开 reset watch 预测 |
+| Bark endpoint | 接收消耗进度、额度重置和近期 reset watch 提醒 |
+| DingTalk robot webhook | 接收带时间戳与 HMAC-SHA256 加签的用量和近期 reset watch 提醒 |
 
 relay 是外部运维组件，不属于本仓库的构建产物。Worker 只接受一个精确的 HTTPS origin，
 并自行追加上游路径。
@@ -62,9 +64,9 @@ transport ──→ application ──→ protocol ──→ core
 | `http` | 有界正文和响应 DTO | 使用 runtime-neutral 类型 |
 | `protocol` | OpenAI、Anthropic、Gemini 的请求与响应转换 | 不发起网络请求，不访问绑定 |
 | `auth` | OAuth、API Key、会话、加密和存储抽象 | 通过窄接口访问时钟、HTTP 和持久化 |
-| `upstream` | Codex 与 Backend API 代理的 URL、header、模型和订阅数据策略 | 仅处理 runtime-neutral 数据 |
-| `application` | 路由模型、请求 adapter、tokenizer 与用量告警状态机 | 编排协议能力，不执行 Cloudflare I/O |
-| `transport` | Workers Request/Response、KV、Fetch、Bark、钉钉机器人、Assets、流和 WebSocket | 唯一 Cloudflare I/O 边界 |
+| `upstream` | Codex、Codex Resets 与 Backend API 代理的 URL、header、模型和数据策略 | 仅处理 runtime-neutral 数据 |
+| `application` | 路由模型、请求 adapter、tokenizer、用量状态机与 reset watch 判定 | 编排协议能力，不执行 Cloudflare I/O |
+| `transport` | Workers Request/Response、KV、Fetch、Codex Resets、Bark、钉钉机器人、Assets、流和 WebSocket | 唯一 Cloudflare I/O 边界 |
 
 `lib.rs` 是事件组合入口。仅 `wasm32` 构建导出 `fetch` 和 `scheduled` 事件。
 
@@ -146,10 +148,16 @@ GET /status/usage
 
 ### 5.5 定时维护
 
-`scheduled` 事件每 5 分钟运行一次。每次运行会通过受信任 relay 获取 Codex 用量，根据额度
-剩余百分比、重置时间和窗口周期判断消耗进度，并把当前快照与提醒状态加密写入 KV。用量请求、
-Bark 请求和钉钉机器人请求均限制为 10 秒且不跟随重定向；Bark 响应正文
-直接丢弃，钉钉响应正文最多读取 64 KiB 并校验 `errcode`。
+`scheduled` 事件每 5 分钟运行一次。每次运行会查询精确的
+`https://codex-resets.com/api/v1/status`，再通过受信任 relay 获取 Codex 用量，根据额度剩余百分比、
+重置时间和窗口周期判断消耗进度，并把当前用量快照与提醒状态加密写入 KV。Codex Resets、用量、
+Bark 和钉钉机器人请求均限制为 10 秒且不跟随重定向；Codex Resets 请求禁用客户端缓存，响应
+最多读取 64 KiB，Bark 响应正文直接丢弃，钉钉响应正文最多读取 64 KiB 并校验 `errcode`。
+
+当 `data.active_watch.observed_at` 距本次查询时间不足 5 分钟时，该 watch 属于本轮事件。
+`expires_at` 转换为东八区的 `MM月DD日 HH:mm`：Bark 使用概率和时间组成标题，正文使用 API 的
+`text`，点击跳转 `source.url`；钉钉使用 Markdown 加粗同一标题，并把 `text` 链接到
+`source.url`。
 
 告警按单个 Codex 额度窗口判断，并把同一轮的多项提醒合并后分别向 Bark 与钉钉机器人推送一次：
 

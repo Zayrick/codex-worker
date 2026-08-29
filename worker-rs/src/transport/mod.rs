@@ -6,6 +6,7 @@ mod application_page;
 mod bark;
 mod body;
 mod codex;
+mod codex_resets;
 mod config;
 mod dingtalk;
 mod oauth;

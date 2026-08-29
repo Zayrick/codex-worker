@@ -3,7 +3,7 @@ use serde_json::json;
 use worker::{Date, Env, ScheduleContext, ScheduledEvent};
 
 use crate::{
-    application::evaluate_codex_usage,
+    application::{PushNotification, evaluate_codex_usage, reset_watch_notification},
     auth::{ApiKeyRepository, OAuthProvider, OAuthRefreshService, OAuthRepository},
     core::{ApiError, AppResult},
     upstream::codex::codex_subscription_from_usage,
@@ -14,6 +14,7 @@ const AUTH_PROXY_REFRESH_CONCURRENCY: usize = 4;
 use super::{
     bark::BarkClient,
     codex::CodexClient,
+    codex_resets::CodexResetsClient,
     config::WorkerConfig,
     dingtalk::DingTalkClient,
     oauth::{CloudflareClock, CloudflareOAuthHttpClient},
@@ -32,6 +33,10 @@ pub async fn handle_scheduled(_event: ScheduledEvent, env: Env, _context: Schedu
     };
     let oauth = OAuthRepository::new(&store, &encryption_key);
     let now_ms = i64::try_from(Date::now().as_millis()).unwrap_or(i64::MAX);
+
+    if let Err(error) = monitor_reset_watch(&env).await {
+        log_api_failure("scheduled_reset_watch", &error);
+    }
 
     if let Err(error) = monitor_usage(&env, &store, &oauth, &encryption_key, now_ms).await {
         log_api_failure("scheduled_usage_monitor", &error);
@@ -73,6 +78,22 @@ pub async fn handle_scheduled(_event: ScheduledEvent, env: Env, _context: Schedu
         .await;
 }
 
+async fn monitor_reset_watch(env: &Env) -> AppResult<()> {
+    let status = CodexResetsClient::fetch_status().await?;
+    let now_ms = i64::try_from(Date::now().as_millis()).unwrap_or(i64::MAX);
+    if let Some(notification) = reset_watch_notification(&status, now_ms) {
+        deliver_notification(
+            env,
+            &notification,
+            now_ms,
+            "scheduled_reset_watch_bark_push",
+            "scheduled_reset_watch_dingtalk_push",
+        )
+        .await;
+    }
+    Ok(())
+}
+
 async fn monitor_usage(
     env: &Env,
     store: &CloudflareSecretStore,
@@ -90,27 +111,44 @@ async fn monitor_usage(
     let evaluation = evaluate_codex_usage(previous.as_ref(), &subscription, now_ms);
 
     if let Some(notification) = evaluation.notification() {
-        let bark = async {
-            let endpoint = WorkerConfig::bark_push_url(env)?;
-            BarkClient::new(&endpoint)?.send(&notification).await
-        };
-        let dingtalk = async {
-            let webhook = WorkerConfig::dingtalk_webhook_url(env)?;
-            let secret = WorkerConfig::dingtalk_secret(env)?;
-            DingTalkClient::new(webhook, secret)
-                .send(&notification.body, now_ms)
-                .await
-        };
-        let (bark_delivery, dingtalk_delivery) = futures_util::join!(bark, dingtalk);
-        if let Err(error) = bark_delivery {
-            log_api_failure("scheduled_bark_push", &error);
-        }
-        if let Err(error) = dingtalk_delivery {
-            log_api_failure("scheduled_dingtalk_push", &error);
-        }
+        deliver_notification(
+            env,
+            &notification,
+            now_ms,
+            "scheduled_bark_push",
+            "scheduled_dingtalk_push",
+        )
+        .await;
     }
 
     repository.store(&evaluation.state).await
+}
+
+async fn deliver_notification(
+    env: &Env,
+    notification: &PushNotification,
+    now_ms: i64,
+    bark_log_event: &str,
+    dingtalk_log_event: &str,
+) {
+    let bark = async {
+        let endpoint = WorkerConfig::bark_push_url(env)?;
+        BarkClient::new(&endpoint)?.send(notification).await
+    };
+    let dingtalk = async {
+        let webhook = WorkerConfig::dingtalk_webhook_url(env)?;
+        let secret = WorkerConfig::dingtalk_secret(env)?;
+        DingTalkClient::new(webhook, secret)
+            .send(notification, now_ms)
+            .await
+    };
+    let (bark_delivery, dingtalk_delivery) = futures_util::join!(bark, dingtalk);
+    if let Err(error) = bark_delivery {
+        log_api_failure(bark_log_event, &error);
+    }
+    if let Err(error) = dingtalk_delivery {
+        log_api_failure(dingtalk_log_event, &error);
+    }
 }
 
 fn log_api_failure(event: &str, error: &ApiError) {

@@ -8,6 +8,8 @@ use crate::{
     },
 };
 
+use super::PushNotification;
+
 const STATE_VERSION: u8 = 1;
 const MAX_WINDOWS: usize = 64;
 const MAX_ID_CHARS: usize = 512;
@@ -59,12 +61,6 @@ struct UsageAlert {
     previous_remaining_percent: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UsageNotification {
-    pub title: String,
-    pub body: String,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct CodexUsageMonitorEvaluation {
     pub state: CodexUsageMonitorState,
@@ -72,7 +68,7 @@ pub struct CodexUsageMonitorEvaluation {
 }
 
 impl CodexUsageMonitorEvaluation {
-    pub fn notification(&self) -> Option<UsageNotification> {
+    pub fn notification(&self) -> Option<PushNotification> {
         if self.alerts.is_empty() {
             return None;
         }
@@ -82,9 +78,10 @@ impl CodexUsageMonitorEvaluation {
             .map(alert_line)
             .collect::<Vec<_>>()
             .join("\n");
-        Some(UsageNotification {
+        Some(PushNotification {
             title: "Codex 额度提醒".into(),
             body,
+            url: None,
         })
     }
 }
